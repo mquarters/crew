@@ -29,6 +29,11 @@ wip_limits:
 
 sprint:
   length_days: 14
+  # Starting capacity in points. The Sponsor approves epics, not sprint
+  # contents: scope is filled mechanically from approved epics in priority
+  # order until this is reached. Replaced by measured velocity once there is
+  # history to measure.
+  capacity_points: 20
   escalation_budget: 3          # cards per sprint permitted to escalate
   blocked_aging_days: 3         # raise to Sponsor at sprint review beyond this
 

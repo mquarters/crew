@@ -81,6 +81,13 @@ class IssueClient:
             sub_issue_id=child_id,
         )
 
+    def sub_issues(self, repo: str, number: int) -> list[dict[str, Any]]:
+        response = self._client.get(
+            f"{API}/repos/{self.owner}/{repo}/issues/{number}/sub_issues?per_page=100"
+        )
+        response.raise_for_status()
+        return response.json()
+
     def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
         self._request("POST", f"/repos/{self.owner}/{repo}/issues/{number}/labels", labels=labels)
 

@@ -8,6 +8,7 @@ re-implemented at every call site.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from functools import cached_property
 from typing import Any
 
@@ -37,6 +38,27 @@ class BoardField(BaseModel):
     data_type: str
     # Single-select option name -> option id; iteration title -> iteration id.
     options: dict[str, str] = Field(default_factory=dict)
+    # Iteration fields only: title, startDate and duration, in board order.
+    iterations: list[dict[str, Any]] = Field(default_factory=list)
+
+    def current_iteration(self, today: date | None = None) -> str | None:
+        """The iteration containing `today`, or the next one starting after it.
+
+        A sprint that has not begun is the right answer before it starts —
+        planning happens ahead of the start date, not on the morning of it.
+        """
+        if not self.iterations:
+            return None
+        today = today or date.today()
+        upcoming: list[tuple[date, str]] = []
+        for it in self.iterations:
+            start = date.fromisoformat(it["startDate"])
+            end = start + timedelta(days=int(it.get("duration", 14)))
+            if start <= today < end:
+                return str(it["title"])
+            if start > today:
+                upcoming.append((start, str(it["title"])))
+        return min(upcoming)[1] if upcoming else str(self.iterations[-1]["title"])
 
 
 class BoardSchema(BaseModel):
@@ -98,7 +120,7 @@ query($owner: String!, $number: Int!) {
           ... on ProjectV2FieldCommon { id name dataType }
           ... on ProjectV2SingleSelectField { id name options { id name } }
           ... on ProjectV2IterationField {
-            id name configuration { iterations { id title } }
+            id name configuration { iterations { id title startDate duration } }
           }
         }
       }
@@ -251,13 +273,15 @@ class ProjectClient:
                 continue
             options = {o["name"]: o["id"] for o in node.get("options") or []}
             config = node.get("configuration") or {}
-            for it in config.get("iterations") or []:
+            iterations = config.get("iterations") or []
+            for it in iterations:
                 options[it["title"]] = it["id"]
             fields[node["name"]] = BoardField(
                 id=node["id"],
                 name=node["name"],
                 data_type=node.get("dataType", ""),
                 options=options,
+                iterations=iterations,
             )
         return BoardSchema(project_id=project["id"], title=project["title"], fields=fields)
 

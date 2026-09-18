@@ -312,10 +312,99 @@ def auth() -> None:
 
 
 @sprint_app.command("start")
-def sprint_start() -> None:
-    """Open a sprint and admit cards from Ready."""
-    console.print("[yellow]Not yet implemented.[/] Requires the board (Phase 2).")
-    raise typer.Exit(code=1)
+def sprint_start(
+    sprint: str = typer.Option(
+        None, "--sprint", help="Iteration name. Defaults to the current one."
+    ),
+    capacity: int = typer.Option(None, "--capacity", help="Points. Defaults to org.yaml."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the plan without admitting it."),
+) -> None:
+    """Fill the sprint from approved epics.
+
+    Approving an epic was the scope decision, so this is mechanical: stories are
+    pulled in priority order until capacity is reached.
+    """
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env, load_org
+    from crew_org.events import EventSink
+    from crew_org.flows.sprint import plan_sprint, start_sprint
+    from crew_org.process import ProcessRules
+    from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
+
+    org, env = load_org(), load_env()
+    token, identity = resolve_credentials(env)
+    owner = env["GITHUB_OWNER"]
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    issues = IssueClient(token, owner)
+
+    sprint = sprint or board.schema.field("Sprint").current_iteration()
+    if not sprint:
+        console.print("[red]No iterations configured on the Sprint field.[/]")
+        raise typer.Exit(code=1)
+    capacity = capacity or org["sprint"]["capacity_points"]
+
+    sink = EventSink(None)
+    rules = ProcessRules.from_config(org)
+    repo = env.get("PILOT_REPO", "crew")
+
+    if dry_run:
+        cards = board.cards()
+        parents = {}
+        from crew_org.flows.sprint import approved_epics
+
+        for epic in approved_epics(cards):
+            for child in issues.sub_issues(epic.repo or repo, epic.number or 0):
+                parents[child["number"]] = epic.number
+        plan = plan_sprint(cards, parents, sprint=sprint, capacity=capacity)
+    else:
+        plan = start_sprint(
+            board,
+            issues,
+            sink,
+            rules,
+            sprint=sprint,
+            capacity=capacity,
+            default_repo=repo,
+        )
+
+    _render_plan(plan, dry_run=dry_run)
+
+
+def _render_plan(plan, *, dry_run: bool) -> None:
+    """Report at the epic level. A Sponsor reading story-by-story is back in the work."""
+    verb = "would admit" if dry_run else "admitted"
+    console.print()
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    table.add_column("epic")
+    table.add_column("stories", justify="right")
+    table.add_column("points", justify="right")
+    table.add_column("")
+    for piece in plan.slices:
+        table.add_row(
+            f"#{piece.number} {piece.title[:46]}",
+            str(len(piece.admitted))
+            + (f" of {len(piece.admitted) + len(piece.deferred)}" if piece.deferred else ""),
+            str(piece.points),
+            "[green]complete[/]" if piece.complete else "[yellow]partial[/]",
+        )
+    console.print(table)
+    console.print(
+        f"[bold]{plan.sprint}[/] — {verb} {len(plan.admitted)} stories, "
+        f"{plan.points} of {plan.capacity} points"
+    )
+    partial = [p for p in plan.slices if not p.complete]
+    if partial:
+        console.print(
+            "[dim]Deferred to the next sprint: "
+            + ", ".join(f"#{p.number} ({len(p.deferred)} stories)" for p in partial)
+            + "[/]"
+        )
+    if plan.unparented:
+        console.print(
+            f"[yellow]Not admitted[/] — {len(plan.unparented)} stories have no parent epic: "
+            + ", ".join(f"#{n}" for n in plan.unparented)
+        )
 
 
 @sprint_app.command("close")

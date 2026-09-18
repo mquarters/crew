@@ -250,3 +250,41 @@ def test_counts_can_be_computed_from_cards_already_read():
     c = client_for(items_response([typed(1, "Ready", "Story")]))
     cards = c.cards()
     assert c.counts(cards) == {"Ready": 1}
+
+
+# --- iterations ----------------------------------------------------------
+
+from datetime import date  # noqa: E402
+
+from crew_org.tools.github_project import BoardField  # noqa: E402
+
+SPRINTS = [
+    {"title": "S1", "startDate": "2026-09-21", "duration": 14},
+    {"title": "S2", "startDate": "2026-10-05", "duration": 14},
+]
+
+
+def sprint_field() -> BoardField:
+    return BoardField(id="F", name="Sprint", data_type="ITERATION", iterations=SPRINTS)
+
+
+def test_the_next_sprint_is_current_before_it_begins():
+    """Planning happens ahead of the start date, not on the morning of it."""
+    assert sprint_field().current_iteration(date(2026, 9, 18)) == "S1"
+
+
+def test_the_containing_sprint_is_current():
+    assert sprint_field().current_iteration(date(2026, 9, 25)) == "S1"
+    assert sprint_field().current_iteration(date(2026, 10, 6)) == "S2"
+
+
+def test_the_boundary_belongs_to_the_next_sprint():
+    assert sprint_field().current_iteration(date(2026, 10, 5)) == "S2"
+
+
+def test_past_the_last_sprint_falls_back_to_it():
+    assert sprint_field().current_iteration(date(2027, 1, 1)) == "S2"
+
+
+def test_an_unconfigured_iteration_field_has_no_current_sprint():
+    assert BoardField(id="F", name="Sprint", data_type="ITERATION").current_iteration() is None
