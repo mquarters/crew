@@ -1,0 +1,32 @@
+# --- Secrets: never commit anything matching these -----------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials.json
+service-account*.json
+.secrets/
+*.secret
+.netrc
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# --- OS ---
+.DS_Store
+
+# --- Runtime state: reconstructible, and may quote issue content ---------
+var/

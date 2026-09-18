@@ -1,0 +1,42 @@
+# LiteLLM proxy for the crew.
+#
+# Rewritten from scratch for SGLang + CrewAI. The older config in
+# ~/Documents/git/litellm targets a vLLM endpoint on :8000 and does not apply.
+#
+# There is deliberately NO Anthropic entry here. Escalation runs through
+# headless Claude Code on an existing subscription, so that no configuration
+# mistake can produce a metered API bill.
+
+model_list:
+  # The crew's workhorse. Every discovery and process role uses this alias, so
+  # the backend can be repointed without touching agent definitions.
+  - model_name: crew-local
+    litellm_params:
+      model: openai/qwen3.8-27b          # openai/ prefix => OpenAI-compatible server
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "sk-not-used"             # SGLang ignores this; LiteLLM requires a value
+      drop_params: true                  # strip params SGLang does not implement
+      temperature: 0.1                   # process work wants determinism, not flair
+      timeout: 300
+
+  # Same backend, looser sampling — for drafting prose (standups, release notes)
+  # where a little variety reads better.
+  - model_name: crew-draft
+    litellm_params:
+      model: openai/qwen3.8-27b
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "sk-not-used"
+      drop_params: true
+      temperature: 0.6
+      timeout: 300
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 300
+  # Agents retry through the escalation policy, not blindly at the transport
+  # layer — a silent retry storm would hide the failure classification.
+  num_retries: 0
+
+general_settings:
+  # Keeps a local record of every request for the audit trail.
+  store_model_in_db: false

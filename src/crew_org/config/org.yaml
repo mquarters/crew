@@ -1,0 +1,65 @@
+# Organization policy. The Scrum Master and the board Flow read this file;
+# it is the single place process constants are defined.
+
+board:
+  # Status column order is authoritative — the Flow derives legal transitions
+  # from this sequence. `Blocked` is off-flow and reachable from anywhere.
+  columns:
+    - Inbox (Goals)
+    - Needs Refinement
+    - Ready
+    - Sprint Backlog
+    - In Progress
+    - In Review
+    - QA
+    - Done
+  blocked_column: Blocked
+
+  # Columns a human owns. No agent may move a card OUT of these.
+  human_gates:
+    - Inbox (Goals)
+
+wip_limits:
+  Needs Refinement: 8
+  Ready: 10
+  Sprint Backlog: 10
+  In Progress: 3
+  In Review: 3
+  QA: 3
+
+sprint:
+  length_days: 14
+  escalation_budget: 3          # cards per sprint permitted to escalate
+  blocked_aging_days: 3         # raise to Sponsor at sprint review beyond this
+
+estimation:
+  scale: [1, 2, 3, 5, 8]
+  max_story_points: 8           # larger must be split, never admitted
+
+execution:
+  max_iterations_per_card: 12   # hard cap; exceeded -> Blocked
+  max_wallclock_seconds: 900    # per card, per tick
+  local_repair_attempts: 2      # SCHEMA / VERIFY retries before giving up
+
+escalation:
+  # Failure classes that may NEVER escalate. Enforced in code, not by prompt.
+  never_escalate: [SCHEMA, SCOPE]
+  may_escalate: [VERIFY, CAPABILITY]
+  require_justification: [CAPABILITY]
+  concurrency: 1                # protects the subscription rate-limit window
+  # Escalation rate above this fraction of sprint cards produces process-defect
+  # issues in the retro.
+  health_threshold: 0.20
+
+labels:
+  routing:
+    refine: crew:refine
+    dev: crew:dev
+    qa: crew:qa
+    review: crew:review
+  control:
+    needs_human: needs:human
+    blocked: blocked
+  defect:
+    prompt: defect:prompt
+    process: defect:process

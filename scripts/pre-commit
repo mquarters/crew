@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#
+# Refuse to commit credentials. Install with:
+#   ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+#
+set -euo pipefail
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[[ -z "$staged" ]] && exit 0
+
+fail=0
+
+# Files that must never be committed regardless of content.
+while IFS= read -r f; do
+  case "$f" in
+    .env|.env.*|*.pem|*.key|*.p12|id_rsa*|id_ed25519*|credentials.json|.netrc)
+      [[ "$f" == ".env.example" ]] && continue
+      echo "BLOCKED: $f must not be committed"; fail=1 ;;
+  esac
+done <<< "$staged"
+
+# Credential-shaped content. Deliberately narrow: placeholders like
+# "sk-not-used" are fine, real-length tokens are not.
+PATTERN='(sk-ant-[a-zA-Z0-9-]{20,}|sk-[a-zA-Z0-9]{32,}|gh[pousr]_[a-zA-Z0-9]{30,}|github_pat_[a-zA-Z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY)'
+if git diff --cached -U0 | grep -qE "^\+.*$PATTERN"; then
+  echo "BLOCKED: staged changes contain something shaped like a credential:"
+  git diff --cached -U0 | grep -nE "^\+.*$PATTERN" | head -5
+  fail=1
+fi
+
+# The cost guarantee is structural — this key must never appear assigned.
+if git diff --cached -U0 | grep -qE "^\+[^#]*ANTHROPIC_API_KEY="; then
+  echo "BLOCKED: ANTHROPIC_API_KEY assigned. Escalation runs on the Claude"
+  echo "         subscription via 'claude -p'; an API key bills separately."
+  fail=1
+fi
+
+exit $fail

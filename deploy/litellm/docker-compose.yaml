@@ -1,0 +1,13 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: crew-litellm
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      # Point at the Spark, e.g. http://gx10-3703.local:30000/v1
+      - SGLANG_BASE_URL=${SGLANG_BASE_URL:?set SGLANG_BASE_URL to the SGLang /v1 endpoint}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
