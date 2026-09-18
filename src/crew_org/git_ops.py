@@ -172,6 +172,16 @@ class Workspace:
         self.path: Path | None = None
         self.branch: str | None = None
 
+    def for_repo(self, repo: str) -> Workspace:
+        """A workspace for another repository in the same organization.
+
+        Returns self when the repository already matches, so the common case
+        costs nothing and callers need not check.
+        """
+        if repo == self.repo:
+            return self
+        return Workspace(self.owner, repo, self.token, self.identity)
+
     @property
     def url(self) -> str:
         return f"https://github.com/{self.owner}/{self.repo}.git"

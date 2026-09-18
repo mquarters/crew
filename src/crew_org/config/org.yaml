@@ -55,6 +55,17 @@ estimation:
   scale: [1, 2, 3, 5, 8]
   max_story_points: 8           # larger must be split, never admitted
 
+delivery:
+  # Repositories the crew may WORK IN. Cards outside this list still appear on
+  # the board, are refined, and are tracked — they are simply never claimed.
+  #
+  # The crew's own repository is deliberately absent. An orchestrator editing
+  # itself mid-run is a sharp edge: a bad change to the delivery loop breaks the
+  # thing making the change, and the failure arrives with no working process to
+  # diagnose it. That work is tracked on the board and done by hand.
+  repos:
+    - sprint-metrics
+
 sandbox:
   # Testing the crew's output means executing code an LLM wrote. That happens in
   # a container with no network, no capabilities, a non-root user and hard

@@ -483,6 +483,12 @@ def deliver(
             )
     for outcome in result.blocked:
         console.print(f"[red]#{outcome.card}[/] {outcome.blocked_reason}")
+    if result.not_ours:
+        console.print(
+            "[dim]not the crew's to build: "
+            + ", ".join(f"#{n}" for n in result.not_ours)
+            + " — tracked on the board, outside delivery.repos[/]"
+        )
     if result.rate_limited:
         console.print(
             "\n[yellow]Stopped on a subscription usage limit.[/] Resume with another run."

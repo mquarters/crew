@@ -142,3 +142,23 @@ def test_an_unrecognised_sandbox_mode_fails_at_startup(tmp_path):
 
 def test_the_shipped_config_sandboxes_by_default():
     assert load_org()["sandbox"]["mode"] == "required"
+
+
+def test_an_empty_delivery_allow_list_fails_at_startup(tmp_path):
+    """An empty list stops the crew working while looking exactly like having
+    nothing to do."""
+    import yaml
+
+    from crew_org.config import load_org
+
+    org = yaml.safe_load((CONFIG_DIR / "org.yaml").read_text())
+    org["delivery"]["repos"] = []
+    path = tmp_path / "org.yaml"
+    path.write_text(yaml.safe_dump(org))
+    with pytest.raises(ValueError, match="work nowhere"):
+        load_org(path)
+
+
+def test_the_crews_own_repository_is_not_one_it_works_in():
+    """An orchestrator editing itself mid-run breaks the thing making the edit."""
+    assert "crew" not in load_org()["delivery"]["repos"]

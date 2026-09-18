@@ -90,8 +90,13 @@ class FakeIssues:
 
 
 class FakeWorkspace:
+    def for_repo(self, repo):
+        self.repos_asked.append(repo)
+        return self
+
     def __init__(self, tmp):
         self.tmp, self.committed, self.pushed, self.closed = tmp, [], 0, 0
+        self.repos_asked: list[str] = []
 
     def open(self, branch):
         path = self.tmp / branch.replace("/", "__")
@@ -116,7 +121,14 @@ def harness(tmp_path, monkeypatch):
     calls = {"implement": 0, "escalate": 0, "feedback": [], "context": []}
 
     def make(
-        *, checks, implement=None, escalate_result=None, cards=None, dry_run=False, limit=None
+        *,
+        checks,
+        implement=None,
+        escalate_result=None,
+        cards=None,
+        dry_run=False,
+        limit=None,
+        repos=None,
     ):
         board = FakeBoard(cards or [story()])
         issues = FakeIssues()
@@ -170,6 +182,7 @@ def harness(tmp_path, monkeypatch):
             repo="sprint-metrics",
             dry_run=dry_run,
             limit=limit,
+            repos=repos,
         )
         return result, board, issues, ws, calls, seen
 
@@ -499,3 +512,62 @@ def test_an_implementation_that_deletes_existing_names_is_rejected(harness, monk
     decided = [e for e in seen if e.kind == EventKind.ESCALATION_DECIDED]
     assert decided[0].detail["failure_class"] == "REGRESSION"
     assert "already_merged" in decided[0].detail["removed"]["src/m.py"]
+
+
+# --- which repositories the crew may work in ----------------------------
+
+
+def other_repo_story(number: int = 20, repo: str = "crew") -> Card:
+    return Card(
+        item_id=f"S{number}",
+        number=number,
+        title=f"Orchestrator work {number}",
+        status="Sprint Backlog",
+        state="OPEN",
+        work_type="Story",
+        sprint=SPRINT,
+        points=3,
+        repo=repo,
+    )
+
+
+def test_a_card_outside_the_allow_list_is_never_claimed(harness):
+    """It belongs on the board — refined, prioritised, visible — but it is not
+    the crew's to implement."""
+    result, board, _, _, calls, _ = harness(
+        checks=[green()], cards=[other_repo_story()], repos={"sprint-metrics"}
+    )
+    assert calls["implement"] == 0
+    assert board.moves == []
+    assert result.not_ours == [20]
+
+
+def test_cards_inside_the_allow_list_are_worked(harness):
+    result, _, _, _, calls, _ = harness(
+        checks=[green()], cards=[story(6)], repos={"sprint-metrics"}
+    )
+    assert calls["implement"] == 1
+    assert result.not_ours == []
+
+
+def test_a_mixed_sprint_works_only_what_it_may(harness):
+    result, _, _, _, calls, _ = harness(
+        checks=[green()], cards=[other_repo_story(20), story(6)], repos={"sprint-metrics"}
+    )
+    assert calls["implement"] == 1
+    assert result.delivered[0].card == 6
+    assert result.not_ours == [20]
+
+
+def test_work_happens_in_the_cards_own_repository(harness):
+    """A global default would implement a card belonging to one repo inside
+    another, silently."""
+    _, _, _, ws, _, _ = harness(checks=[green()], cards=[story(6)])
+    assert ws.repos_asked == ["sprint-metrics"]
+
+
+def test_without_an_allow_list_nothing_is_excluded(harness):
+    """Absent configuration should not silently stop the crew working."""
+    result, _, _, _, calls, _ = harness(checks=[green()], cards=[story(6)])
+    assert calls["implement"] == 1
+    assert result.not_ours == []

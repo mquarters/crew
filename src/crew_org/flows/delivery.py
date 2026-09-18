@@ -71,6 +71,7 @@ class DeliveryResult:
     delivered: list[DeliveryOutcome] = field(default_factory=list)
     blocked: list[DeliveryOutcome] = field(default_factory=list)
     recovered: list[int] = field(default_factory=list)
+    not_ours: list[int] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -129,8 +130,13 @@ def reconcile_orphans(
     return recovered
 
 
-def sprint_stories(cards: list[Card], sprint: str) -> list[Card]:
-    """Stories in this sprint waiting to be picked up."""
+def sprint_stories(cards: list[Card], sprint: str, *, repos: set[str] | None = None) -> list[Card]:
+    """Stories in this sprint the crew may pick up.
+
+    `repos` is the allow-list of repositories the crew works in. A card outside
+    it belongs on the board — refined, prioritised, visible — but is not the
+    crew's to implement, so it is never claimed.
+    """
     return sorted(
         (
             c
@@ -139,9 +145,23 @@ def sprint_stories(cards: list[Card], sprint: str) -> list[Card]:
             and c.work_type == STORY_TYPE
             and c.state != "CLOSED"
             and (c.sprint == sprint or sprint is None)
+            and (repos is None or c.repo in repos)
         ),
         key=lambda c: c.number or 0,
     )
+
+
+def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
+    """Sprint stories the crew is not permitted to work on. Reported, not hidden."""
+    return [
+        c
+        for c in cards
+        if c.status == SPRINT_BACKLOG
+        and c.work_type == STORY_TYPE
+        and c.state != "CLOSED"
+        and (c.sprint == sprint or sprint is None)
+        and c.repo not in repos
+    ]
 
 
 def repository_context(worktree: Path, *, include_source: bool = False) -> str:
@@ -468,6 +488,7 @@ def deliver(
     default_branch: str = "main",
     dry_run: bool = False,
     limit: int | None = None,
+    repos: set[str] | None = None,
 ) -> DeliveryResult:
     """Pull stories into progress up to the WIP limit, and deliver them."""
     result = DeliveryResult()
@@ -480,7 +501,17 @@ def deliver(
     result.recovered = recovered
     counts = board.counts(cards)
 
-    for index, card in enumerate(sprint_stories(cards, sprint)):
+    if repos is not None:
+        skipped = not_ours(cards, sprint, repos)
+        if skipped:
+            result.not_ours = [c.number or 0 for c in skipped]
+            sink.note(
+                EventKind.NOTE,
+                f"{len(skipped)} cards are outside the crew's repositories: "
+                + ", ".join(f"#{c.number} ({c.repo})" for c in skipped),
+            )
+
+    for index, card in enumerate(sprint_stories(cards, sprint, repos=repos)):
         if limit is not None and index >= limit:
             break
         verdict = rules.may_move(frm=SPRINT_BACKLOG, to=IN_PROGRESS, counts=counts)
@@ -500,17 +531,20 @@ def deliver(
             )
         )
 
+        # The card names its own repository. Using a global default would
+        # implement a card belonging to one repo inside another, silently.
+        card_repo = card.repo or repo
         try:
             outcome = deliver_story(
                 card,
                 board=board,
                 issues=issues,
                 sink=sink,
-                ws=ws,
+                ws=ws.for_repo(card_repo),
                 policy=policy,
                 ledger=ledger,
                 sprint=sprint,
-                repo=repo,
+                repo=card_repo,
                 default_branch=default_branch,
                 dry_run=dry_run,
             )

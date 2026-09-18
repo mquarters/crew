@@ -55,6 +55,15 @@ def _validate(org: dict[str, Any]) -> None:
 
     # A typo here would silently disable the sandbox, so it fails at startup
     # rather than the first time generated code runs.
+    # An empty allow-list would silently stop the crew working, which looks
+    # identical to having nothing to do.
+    delivery = org.get("delivery") or {}
+    if "repos" in delivery and not delivery["repos"]:
+        raise ValueError(
+            "delivery.repos is empty, so the crew can work nowhere. Remove the key "
+            "to allow every repository, or name the ones it may work in."
+        )
+
     sandbox = org.get("sandbox") or {}
     mode = sandbox.get("mode", "required")
     if mode not in ("required", "off"):
