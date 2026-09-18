@@ -73,3 +73,35 @@ def test_validation_checks_protection_before_shape():
     """'main' is refused as protected, not merely as badly shaped."""
     with pytest.raises(ProtectedBranchError):
         validate_branch_name("main")
+
+
+# --- worktrees -----------------------------------------------------------
+
+
+def test_the_registry_is_pruned_before_a_worktree_is_opened(monkeypatch, tmp_path):
+    """Git records worktrees in the clone, and that record outlives the
+    directory. Without a prune, a tree deleted from disk still holds its branch
+    and the next run cannot claim it."""
+    from crew_org import git_ops
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, *, cwd=None, token=None):
+        calls.append(args)
+        if args[0] == "symbolic-ref":
+            return "refs/remotes/origin/main"
+        return ""
+
+    monkeypatch.setattr(git_ops, "_run", fake_run)
+    monkeypatch.setattr(git_ops.Workspace, "_ensure_clone", lambda self: None)
+
+    ws = git_ops.Workspace("o", "r", "tok", git_ops.BotIdentity("bot", 1))
+    monkeypatch.setattr(git_ops, "WORKTREES", tmp_path / "wt")
+    ws.open("feat/6-a-story")
+
+    subcommands = [c[0] for c in calls]
+    assert "prune" in [c[1] for c in calls if c[0] == "worktree"]
+    assert subcommands.index("worktree") < len(subcommands)
+    # The prune must come before the add, or it prunes nothing useful.
+    worktree_ops = [c[1] for c in calls if c[0] == "worktree"]
+    assert worktree_ops.index("prune") < worktree_ops.index("add")

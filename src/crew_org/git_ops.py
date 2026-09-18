@@ -202,6 +202,12 @@ class Workspace:
         path = (WORKTREES / branch.replace("/", "__")).resolve()
         if path.exists():
             self.close(path)
+
+        # Git records worktrees in the clone, and that record outlives the
+        # directory: a tree deleted from the filesystem is still "checked out"
+        # as far as git is concerned, and the branch cannot be claimed again.
+        # Prune reconciles the registry with what is actually on disk.
+        _run(["worktree", "prune"], cwd=self.clone)
         path.parent.mkdir(parents=True, exist_ok=True)
 
         _run(
