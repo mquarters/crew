@@ -383,3 +383,14 @@ def test_a_stranded_card_with_an_open_pull_request_goes_to_review(harness, monke
 def test_healing_does_not_touch_cards_that_are_where_they_belong(harness):
     result, board, _, _, _, _ = harness(checks=[green()], cards=[story(6)])
     assert result.recovered == []
+
+
+def test_a_failure_event_records_why_not_only_what(harness):
+    """Recording the disposition without the reason says what happened and not
+    why — which is the half a retro actually needs."""
+    _, _, _, _, _, seen = harness(checks=[red("2 failed in test_metrics.py"), green()])
+    decided = next(e for e in seen if e.kind == EventKind.ESCALATION_DECIDED)
+    assert decided.detail["failure_class"] == "VERIFY"
+    assert "2 failed in test_metrics.py" in decided.detail["output"]
+    assert decided.detail["reason"]
+    assert decided.detail["failing_commands"] == ["pytest"]

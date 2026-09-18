@@ -230,6 +230,15 @@ def deliver_story(
                     role="Developer",
                     card=number,
                     summary=f"SCHEMA — {decision.disposition}",
+                    detail={
+                        # The reason is the whole diagnostic. Recording only the
+                        # disposition says what happened and not why, which is
+                        # exactly what a retro needs.
+                        "failure_class": FailureClass.SCHEMA,
+                        "attempt": outcome.attempts,
+                        "reason": decision.reason,
+                        "error": str(exc)[:600],
+                    },
                 )
             )
             if decision.disposition is Disposition.RETRY_LOCAL:
@@ -258,6 +267,13 @@ def deliver_story(
                 role="Developer",
                 card=number,
                 summary=f"VERIFY — {decision.disposition}",
+                detail={
+                    "failure_class": FailureClass.VERIFY,
+                    "attempt": outcome.attempts,
+                    "reason": decision.reason,
+                    "failing_commands": [r.command for r in check.results if not r.ok],
+                    "output": check.failure_report[:600],
+                },
             )
         )
 
