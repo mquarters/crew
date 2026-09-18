@@ -183,6 +183,15 @@ for repo in "$CREW_REPO" "$PILOT_REPO"; do
       -F "enforce_admins=false" \
       -F "restrictions=" >/dev/null 2>&1; then
     ok "${repo}: main protected"
+    # Agents authenticate with the owner's credentials, so they are admins.
+    # Without enforce_admins the protection does not apply to them at all and
+    # the "never push to main" rail is decorative. Enabled on repositories the
+    # crew writes to; left off on the crew repo itself, which the operator is
+    # still building by hand.
+    if [[ "$repo" == "$PILOT_REPO" ]]; then
+      gh api -X POST "repos/${OWNER}/${repo}/branches/main/protection/enforce_admins" \
+        >/dev/null 2>&1 && ok "${repo}: protection applies to admins too"
+    fi
   else
     warn "${repo}: could not set protection. Two common causes:"
     warn "  - main does not exist yet; push an initial commit and re-run."
