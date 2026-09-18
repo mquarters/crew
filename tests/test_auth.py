@@ -102,3 +102,36 @@ def test_commented_out_token_is_not_used(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text(f"#GITHUB_TOKEN={FINE}\n")
     assert load_token(env) is None
+
+
+# --- organization membership --------------------------------------------
+
+
+def test_org_member_passes(monkeypatch):
+    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(204))
+    assert auth.check_org_membership(FINE, "mqucifer", "someone").status is Status.PASS
+
+
+def test_non_member_fails_with_the_write_role_hint(monkeypatch):
+    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(404))
+    result = auth.check_org_membership(FINE, "mqucifer", "someone")
+    assert result.status is Status.FAIL
+    assert "Write" in (result.hint or "")
+
+
+def test_org_owner_does_not_trigger_the_owner_match_warning(monkeypatch):
+    """Against an organization the login never matches, so that warning is noise."""
+    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(204))
+    monkeypatch.setattr(
+        auth,
+        "check_identity",
+        lambda t: (auth.AuthCheck(check="identity", status=Status.PASS, detail="x"), "mquarters"),
+    )
+    monkeypatch.setattr(
+        auth,
+        "check_project_access",
+        lambda *a, **k: auth.AuthCheck(check="project board", status=Status.PASS, detail="x"),
+    )
+    checks = auth.verify(FINE, owner="mqucifer", repos=[], project_number=1, owner_is_org=True)
+    assert not any(c.check == "owner match" for c in checks)
+    assert any(c.check == "org membership" for c in checks)

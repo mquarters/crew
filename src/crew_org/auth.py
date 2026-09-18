@@ -85,10 +85,9 @@ def check_token_type(token: str) -> AuthCheck:
             check="token type",
             status=Status.WARN,
             detail="classic token — scopes apply to every repository you can see",
-            hint="Unavoidable while the board is user-owned: fine-grained tokens cannot "
-            "reach user-owned Projects v2. Keep the scopes to 'project' and "
-            "'public_repo' (never full 'repo'), or move the board to an organization "
-            "and switch to a fine-grained token. See docs/agent-auth.md.",
+            hint="Replace with a fine-grained token scoped to just the crew's repos, "
+            "granting Projects: Read and write under the organization's permissions. "
+            "A classic token reaches every repository you can see.",
         )
     return AuthCheck(check="token type", status=Status.WARN, detail="unrecognised token format")
 
@@ -185,43 +184,80 @@ def check_issue_write(token: str, owner: str, repo: str) -> AuthCheck:
     )
 
 
-def check_project_access(token: str, owner: str, number: int) -> AuthCheck:
-    """Projects v2 lives behind GraphQL and needs its own permission."""
-    try:
-        r = httpx.post(
-            f"{API}/graphql",
-            headers={"Authorization": f"Bearer {token}"},
-            json={
-                "query": "query($o:String!,$n:Int!){user(login:$o){projectV2(number:$n){title}}}",
-                "variables": {"o": owner, "n": number},
-            },
-            timeout=TIMEOUT,
-        )
-        body = r.json()
-    except Exception as exc:  # noqa: BLE001
-        return AuthCheck(check="project board", status=Status.FAIL, detail=str(exc))
+def _project_query(kind: str) -> str:
+    return f"query($o:String!,$n:Int!){{{kind}(login:$o){{projectV2(number:$n){{title}}}}}}"
 
-    if body.get("errors"):
-        return AuthCheck(
-            check="project board",
-            status=Status.FAIL,
-            detail=body["errors"][0].get("message", "rejected")[:80],
-            hint="If this is a fine-grained token, it cannot reach a user-owned board "
-            "at all — that permission does not exist. Either use a classic token with "
-            "the 'project' scope, or move the board to an organization. "
-            "See docs/agent-auth.md.",
-        )
-    project = ((body.get("data") or {}).get("user") or {}).get("projectV2")
-    if not project:
-        return AuthCheck(
-            check="project board", status=Status.FAIL, detail="board not visible to this token"
-        )
+
+def check_project_access(token: str, owner: str, number: int) -> AuthCheck:
+    """Projects v2 lives behind GraphQL and needs its own permission.
+
+    Tries the organization root first: an org-owned board is the only kind a
+    fine-grained token can reach at all, so it is the expected shape.
+    """
+    last_error = "rejected"
+    for kind in ("organization", "user"):
+        try:
+            r = httpx.post(
+                f"{API}/graphql",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"query": _project_query(kind), "variables": {"o": owner, "n": number}},
+                timeout=TIMEOUT,
+            )
+            body = r.json()
+        except Exception as exc:  # noqa: BLE001
+            return AuthCheck(check="project board", status=Status.FAIL, detail=str(exc))
+
+        if body.get("errors"):
+            last_error = body["errors"][0].get("message", "rejected")
+            continue
+        project = ((body.get("data") or {}).get(kind) or {}).get("projectV2")
+        if project:
+            note = " (user-owned)" if kind == "user" else ""
+            return AuthCheck(
+                check="project board",
+                status=Status.WARN if kind == "user" else Status.PASS,
+                detail=f"can read {project['title']!r}{note}",
+                hint=(
+                    "A user-owned board cannot be driven by a fine-grained token. "
+                    "Move it to an organization. See docs/agent-auth.md."
+                )
+                if kind == "user"
+                else None,
+            )
+
     return AuthCheck(
-        check="project board", status=Status.PASS, detail=f"can read {project['title']!r}"
+        check="project board",
+        status=Status.FAIL,
+        detail=last_error[:80],
+        hint="If this is a fine-grained token, grant Projects: Read and write under the "
+        "organization's permissions. If the board is user-owned, a fine-grained token "
+        "cannot reach it at all. See docs/agent-auth.md.",
     )
 
 
-def verify(token: str, *, owner: str, repos: list[str], project_number: int) -> list[AuthCheck]:
+def check_org_membership(token: str, org: str, login: str) -> AuthCheck:
+    """The token's identity must actually be able to act inside the org."""
+    r = _get(token, f"/orgs/{org}/members/{login}")
+    if r.status_code == 204:
+        return AuthCheck(
+            check="org membership", status=Status.PASS, detail=f"{login!r} is a member of {org!r}"
+        )
+    return AuthCheck(
+        check="org membership",
+        status=Status.FAIL,
+        detail=f"{login!r} is not a visible member of {org!r}",
+        hint=f"Invite it to {org} with the Write role — never Admin.",
+    )
+
+
+def verify(
+    token: str,
+    *,
+    owner: str,
+    repos: list[str],
+    project_number: int,
+    owner_is_org: bool = True,
+) -> list[AuthCheck]:
     """Run the full check set, positive and negative."""
     checks = [check_token_type(token)]
     identity, login = check_identity(token)
@@ -229,16 +265,19 @@ def verify(token: str, *, owner: str, repos: list[str], project_number: int) -> 
     if identity.status is Status.FAIL:
         return checks
 
-    if login and login != owner:
-        checks.append(
-            AuthCheck(
-                check="owner match",
-                status=Status.WARN,
-                detail=f"token acts as {login!r}, board owner is {owner!r}",
-                hint="Expected once a machine account is in use — it is what lets the "
-                "owner approve the crew's pull requests.",
+    if login:
+        if owner_is_org:
+            checks.append(check_org_membership(token, owner, login))
+        elif login != owner:
+            checks.append(
+                AuthCheck(
+                    check="owner match",
+                    status=Status.WARN,
+                    detail=f"token acts as {login!r}, board owner is {owner!r}",
+                    hint="Expected once a machine account is in use — it is what lets the "
+                    "owner approve the crew's pull requests.",
+                )
             )
-        )
 
     for repo in repos:
         checks.append(check_repo_access(token, owner, repo))

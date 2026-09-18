@@ -23,52 +23,23 @@ not solve this; it needs a second account.
 
 ---
 
-## The constraint that shapes everything below
+## Why the board is organization-owned
 
 **Fine-grained tokens cannot access Projects v2 owned by a user account.**
 GitHub documents this as a known gap: the `Projects` permission exists only
-under *organization* permissions, and there is no account-level equivalent.
+under *organization* permissions, with no account-level equivalent.
 
-Since the board *is* the orchestrator, this is not a detail the crew can work
-around. It forces a choice.
+Because the board *is* the orchestrator, a user-owned board would have forced a
+classic token — coarse scopes reaching every repository the owner can see.
+That is the blast radius this whole exercise exists to avoid.
 
-| | Board owner | Token | Blast radius |
-|---|---|---|---|
-| **A** | Organization | Fine-grained, per-repo | Exactly the two repos, exactly four permissions |
-| **B** | Your account | Classic, `project` + `public_repo` | Every public repo you own, now and in future |
+So both repositories and the board live in the free organization
+**`mqucifer`**. That also buys two things worth having:
 
-### Option A — move the board to a free organization (recommended)
-
-A free GitHub organization costs nothing and fixes several things at once:
-
-- fine-grained tokens gain `Projects: Read and write` under organization
-  permissions, so the crew's credential can finally be scoped properly;
-- organizations support **project templates**, so future boards clone from a
-  configured one rather than being rebuilt field by field;
-- a machine account becomes an ordinary org member with the **Write** role,
-  which is the natural way to solve the self-approval problem below;
-- repository and project ownership stop being tangled up with your personal
-  account.
-
-Migration is mostly scriptable: repositories transfer via the API (old URLs
-redirect), and `copyProjectV2` accepts an `ownerId`, so the board copies across
-with its fields intact. Only creating the organization itself is manual —
-GitHub has no API for it.
-
-### Option B — a classic token, kept as narrow as possible
-
-Works today with no migration. If you take it, grant **only**:
-
-- `project` — the board
-- `public_repo` — write access to public repositories
-
-**Not** full `repo`. That scope reaches every private repository you can see,
-which is the blast radius this whole exercise exists to avoid.
-
-The residual risk is real but bounded while you own few public repos: the token
-can write to all of them, and that set grows silently as you create more.
-
----
+- **Project templates**, which are an organization feature. Future boards clone
+  from a configured one instead of being rebuilt field by field.
+- **A home for the machine account** — an ordinary org member with the Write
+  role, which is how the self-approval problem below gets solved.
 
 ## Fine-grained token permissions (Option A)
 
@@ -78,7 +49,7 @@ Create at **https://github.com/settings/personal-access-tokens/new**
 |---|---|
 | Token name | `crew-agents` |
 | Expiration | 90 days (calendar a rotation) |
-| Resource owner | **the organization** |
+| Resource owner | **`mqucifer`** |
 | Repository access | Only select repositories → `crew`, `sprint-metrics` |
 
 **Repository permissions:**
@@ -118,9 +89,9 @@ what makes "agents never push to main" true there.
 
 ## Step 2 — a machine account (before Phase 3)
 
-Needed to solve problem 2. Create a second GitHub account (e.g. `mquarters-crew`),
-invite it as a collaborator with **Write** — never Admin — on both repos, and
-issue the fine-grained token above from *that* account instead.
+Needed to solve problem 2. Create a second GitHub account (e.g. `mquarters-crew`), invite it to the
+`mqucifer` organization with the **Write** role — never Owner — and issue the
+fine-grained token above from *that* account instead.
 
 Then:
 

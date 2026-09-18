@@ -11,6 +11,10 @@
 #
 set -euo pipefail
 
+# The board must be organization-owned: fine-grained tokens cannot reach
+# Projects v2 owned by a user account (GitHub documents this gap). A free
+# organization is enough. Create it in the UI first — there is no API for it.
+OWNER="${OWNER:-mqucifer}"
 CREW_REPO="${CREW_REPO:-crew}"
 PILOT_REPO="${PILOT_REPO:-sprint-metrics}"
 PROJECT_TITLE="${PROJECT_TITLE:-Crew Delivery}"
@@ -30,8 +34,14 @@ if ! gh auth status 2>&1 | grep -q "'project'"; then
   warn "Run: gh auth refresh -s project,read:project"
   exit 1
 fi
-OWNER="$(gh api user --jq .login)"
-ok "authenticated as ${OWNER} with project scope"
+ACTOR="$(gh api user --jq .login)"
+if ! gh api "orgs/${OWNER}" >/dev/null 2>&1; then
+  echo "Organization '${OWNER}' not found or not visible."
+  echo "Create it at https://github.com/organizations/plan (free), then re-run."
+  echo "Or set OWNER=<org> to name a different one."
+  exit 1
+fi
+ok "authenticated as ${ACTOR}, targeting organization ${OWNER}"
 
 # --- repositories --------------------------------------------------------
 say "Repositories"
@@ -243,6 +253,7 @@ echo "  Crew:     https://github.com/${OWNER}/${CREW_REPO}"
 echo "  Pilot:    https://github.com/${OWNER}/${PILOT_REPO}"
 echo
 echo "  Record these in .env:"
+echo "    GITHUB_OWNER_TYPE=organization"
 echo "    GITHUB_OWNER=${OWNER}"
 echo "    GITHUB_PROJECT_NUMBER=${PROJECT_NUMBER}"
 echo "    GITHUB_PROJECT_ID=${PROJECT_ID}"

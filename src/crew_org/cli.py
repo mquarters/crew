@@ -224,6 +224,7 @@ def auth() -> None:
         owner=owner,
         repos=repos,
         project_number=int(env.get("GITHUB_PROJECT_NUMBER", 0)),
+        owner_is_org=env.get("GITHUB_OWNER_TYPE", "organization") == "organization",
     )
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
