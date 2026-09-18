@@ -134,20 +134,56 @@ create_field "Owner Agent" SINGLE_SELECT "Product Owner,Business Analyst,Archite
 create_field "Points"      NUMBER
 create_field "Escalations" NUMBER
 
-# An iteration field gives the metrics CLI real sprint date ranges. gh cannot
-# always create one; fall back to text so the bootstrap still completes.
-if ! field_exists "Sprint"; then
-  if gh project field-create "$PROJECT_NUMBER" --owner "$OWNER" \
-       --name "Sprint" --data-type ITERATION >/dev/null 2>&1; then
-    ok "created Sprint (iteration)"
-  else
-    gh project field-create "$PROJECT_NUMBER" --owner "$OWNER" \
-      --name "Sprint" --data-type TEXT >/dev/null
-    warn "Sprint created as TEXT — gh could not create an iteration field."
-    warn "  Convert it in the project UI if you want real sprint date ranges."
-  fi
-else
+# `gh project field-create` has no ITERATION option, but the GraphQL API does —
+# and updateProjectV2Field can configure the iteration periods too, so the whole
+# thing is scriptable rather than a manual step in the project UI.
+SPRINT_DAYS="${SPRINT_DAYS:-14}"
+if field_exists "Sprint"; then
   ok "Sprint already exists"
+else
+  SPRINT_FIELD="$(gh api graphql -f query='
+    mutation($p: ID!) {
+      createProjectV2Field(input: {projectId: $p, dataType: ITERATION, name: "Sprint"}) {
+        projectV2Field { ... on ProjectV2IterationField { id } }
+      }
+    }' -f p="$PROJECT_ID" --jq '.data.createProjectV2Field.projectV2Field.id')"
+
+  python3 - "$SPRINT_FIELD" "$SPRINT_DAYS" <<'PY' | gh api graphql --input - >/dev/null
+import json, sys
+from datetime import date, timedelta
+
+field, duration = sys.argv[1], int(sys.argv[2])
+# Start on the next Monday so sprint boundaries land on week boundaries.
+today = date.today()
+start = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+
+MUTATION = """
+mutation($field: ID!, $config: ProjectV2IterationFieldConfigurationInput!) {
+  updateProjectV2Field(input: {fieldId: $field, iterationConfiguration: $config}) {
+    projectV2Field { ... on ProjectV2IterationField { name } }
+  }
+}
+"""
+print(json.dumps({
+    "query": MUTATION,
+    "variables": {
+        "field": field,
+        "config": {
+            "startDate": start.isoformat(),
+            "duration": duration,
+            "iterations": [
+                {
+                    "startDate": (start + timedelta(days=duration * i)).isoformat(),
+                    "duration": duration,
+                    "title": f"S{i + 1}",
+                }
+                for i in range(3)
+            ],
+        },
+    },
+}))
+PY
+  ok "created Sprint (iteration, ${SPRINT_DAYS}-day, 3 seeded)"
 fi
 
 # --- labels --------------------------------------------------------------

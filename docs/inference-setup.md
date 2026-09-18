@@ -5,11 +5,16 @@ by a LiteLLM proxy. Escalation runs through headless Claude Code on an existing
 subscription — there is deliberately **no `ANTHROPIC_API_KEY`** anywhere in this
 project, so escalation cannot incur metered API charges.
 
+The serving stack itself is a separate project — see
+[`reference/sglang-serving.md`](reference/sglang-serving.md) for the resolved
+runtime flags and what the crew depends on.
+
 ## Verified configuration (2026-09-18)
 
 | | |
 |---|---|
 | Endpoint | `http://gx10-3703.local:8888/v1` — **not** SGLang's default 30000 |
+| Launcher | `./start-dflash.sh` on `sparky` (DFlash2 speculative decoding) |
 | Served name | `qwen3.8-27b-sglang` |
 | Context | 262,144 tokens |
 | Tool calling | working — emits well-formed `tool_calls` |
