@@ -56,6 +56,8 @@ def render_epic_body(epic: Epic, goal_number: int, goal_title: str) -> str:
             "",
             f"**Why** — {epic.rationale}",
             "",
+            f"**Stands alone because** — {epic.separately_deliverable}",
+            "",
             "---",
             "",
             f"Proposed by the Product Owner from #{goal_number} *({goal_title})*.",

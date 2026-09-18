@@ -17,8 +17,22 @@ from crew_org.tools.github_project import Card
 
 PROPOSAL = EpicProposal(
     epics=[
-        Epic(title="Report as a table", outcome="Sponsor sees metrics", rationale="most valuable"),
-        Epic(title="Emit JSON", outcome="tooling can consume it", rationale="completes formats"),
+        Epic(
+            title="Report as a table",
+            outcome="Sponsor sees metrics",
+            rationale="most valuable",
+            separately_deliverable=(
+                "The Sponsor can read every metric in the terminal with no other work done."
+            ),
+        ),
+        Epic(
+            title="Emit JSON",
+            outcome="tooling can consume it",
+            rationale="completes formats",
+            separately_deliverable=(
+                "Other tools can consume the metrics even if nobody reads the table."
+            ),
+        ),
     ],
     ordering_rationale="Table first because it answers the question immediately.",
 )

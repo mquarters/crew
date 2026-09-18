@@ -10,13 +10,23 @@ reviewer has to notice later.
 from __future__ import annotations
 
 from crewai import Crew, Process, Task
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crew_org.agents import build_agents
 
 # Modified Fibonacci, per constitution §6. Nothing larger enters a sprint.
 POINT_SCALE = (1, 2, 3, 5, 8)
 MIN_CRITERIA = 2
+
+# A Sponsor goal that decomposes into one epic has not been decomposed — there
+# is nothing to sequence and nothing to deliver early. Observed in practice: the
+# same goal produced two epics on one run and one on the next, so the judgement
+# is encoded here rather than left to the Sponsor to catch each sprint.
+MIN_EPICS = 2
+MAX_EPICS = 5
+
+# A justification shorter than this is a restatement, not an argument.
+MIN_JUSTIFICATION = 40
 
 
 class AcceptanceCriterion(BaseModel):
@@ -62,6 +72,31 @@ class Epic(BaseModel):
     title: str = Field(description="Short imperative title")
     outcome: str = Field(description="The user-visible outcome this delivers")
     rationale: str = Field(description="Why this slice is worth doing, and why now")
+    separately_deliverable: str = Field(
+        description=(
+            "Why this epic can ship on its own and still be worth having, without "
+            "the others. Name what the user could do with only this."
+        )
+    )
+
+    @field_validator("separately_deliverable")
+    @classmethod
+    def _is_an_argument(cls, value: str) -> str:
+        if len(value.strip()) < MIN_JUSTIFICATION:
+            raise ValueError(
+                "state specifically what a user could do with this epic alone. "
+                "If nothing, it is not a separate epic — fold it into another."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _not_a_restatement(self) -> Epic:
+        if self.separately_deliverable.strip().lower() == self.outcome.strip().lower():
+            raise ValueError(
+                "separately_deliverable repeats the outcome. It must argue why this "
+                "slice stands alone, which is a different question."
+            )
+        return self
 
 
 class EpicProposal(BaseModel):
@@ -72,9 +107,22 @@ class EpicProposal(BaseModel):
 
     @field_validator("epics")
     @classmethod
-    def _not_empty(cls, value: list[Epic]) -> list[Epic]:
-        if not value:
-            raise ValueError("a goal must decompose into at least one epic")
+    def _decomposed(cls, value: list[Epic]) -> list[Epic]:
+        if len(value) < MIN_EPICS:
+            raise ValueError(
+                f"a goal must decompose into at least {MIN_EPICS} epics, got {len(value)}. "
+                "One epic is not a decomposition: there is nothing to sequence and "
+                "nothing deliverable early. Split by workflow step, by business rule, "
+                "or by happy-path-then-edge-cases — never by architectural layer."
+            )
+        if len(value) > MAX_EPICS:
+            raise ValueError(
+                f"{len(value)} epics is too many for one goal (limit {MAX_EPICS}). "
+                "Group the smaller slices into coherent outcomes."
+            )
+        titles = [e.title.strip().lower() for e in value]
+        if len(set(titles)) != len(titles):
+            raise ValueError("two epics share a title; each must be a distinct slice")
         return value
 
 
@@ -98,9 +146,12 @@ def propose_epics(goal: str) -> EpicProposal:
     task = Task(
         description=(
             f"The Product Sponsor has set this goal:\n\n{goal}\n\n"
-            "Propose the smallest set of epics that together deliver it. "
+            f"Propose between {MIN_EPICS} and {MAX_EPICS} epics that together deliver it. "
             "Decompose by outcome, never by architectural layer. "
-            "Order them so the most valuable is deliverable first."
+            "Order them so the most valuable is deliverable first.\n\n"
+            "For each epic, state what a user could do with that epic alone, without "
+            "the others. If you cannot say, it is not a separate epic — merge it. "
+            "A goal that comes back as a single epic has not been decomposed."
         ),
         expected_output="A set of epics, each with a title, outcome and rationale.",
         agent=agents["product_owner"],
