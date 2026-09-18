@@ -103,6 +103,20 @@ class EscalationLedger:
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(entry.model_dump_json() + "\n")
 
+    def resolve(self, card: int, sprint: str, outcome: str) -> None:
+        """Record how an escalation ended.
+
+        Written as a second append rather than an edit, because the log is
+        append-only and the fact of escalating must survive a run that dies
+        before it finishes. Without this an escalation reads as an unresolved
+        failure forever, and the retro draws the wrong conclusion from it —
+        observed on the first real escalation.
+        """
+        for entry in reversed(self.entries(sprint)):
+            if entry.card == card:
+                self.record(entry.model_copy(update={"outcome": outcome, "at": utcnow()}))
+                return
+
     def entries(self, sprint: str | None = None) -> list[EscalationRecord]:
         if not self.path.exists():
             return []
@@ -116,6 +130,14 @@ class EscalationLedger:
                 if sprint is None or entry.sprint == sprint:
                     out.append(entry)
         return out
+
+    def outcomes(self, sprint: str) -> dict[int, str | None]:
+        """The latest known outcome per escalated card."""
+        latest: dict[int, str | None] = {}
+        for entry in self.entries(sprint):
+            if entry.card not in latest or entry.outcome is not None:
+                latest[entry.card] = entry.outcome
+        return latest
 
     def spent(self, sprint: str) -> int:
         """Escalations charged against this sprint's budget.

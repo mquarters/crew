@@ -172,3 +172,45 @@ def test_shipped_org_config_builds_a_policy_that_forbids_schema_and_scope():
     assert policy.never_escalate == {FailureClass.SCHEMA, FailureClass.SCOPE}
     for cls in (FailureClass.SCHEMA, FailureClass.SCOPE):
         assert not policy.decide(failure(cls, attempts=99), spent=0).escalates
+
+
+# --- outcomes ------------------------------------------------------------
+
+
+def test_an_escalation_without_an_outcome_reads_as_unresolved(tmp_path):
+    ledger = EscalationLedger(tmp_path / "l.jsonl")
+    ledger.record(record(6))
+    assert ledger.outcomes("S1") == {6: None}
+
+
+def test_resolving_records_how_the_escalation_ended(tmp_path):
+    """Without this an escalation reads as an unresolved failure forever, and
+    the retro concludes a shipped story was broken."""
+    ledger = EscalationLedger(tmp_path / "l.jsonl")
+    ledger.record(record(6))
+    ledger.resolve(6, "S1", "resolved — lint and tests pass")
+    assert ledger.outcomes("S1") == {6: "resolved — lint and tests pass"}
+
+
+def test_resolving_does_not_spend_more_budget(tmp_path):
+    """The resolution is a second append; budget is still charged per card."""
+    ledger = EscalationLedger(tmp_path / "l.jsonl")
+    ledger.record(record(6))
+    ledger.resolve(6, "S1", "resolved")
+    assert ledger.spent("S1") == 1
+
+
+def test_the_original_escalation_survives_the_resolution(tmp_path):
+    """Append-only: the fact of escalating must outlive a run that dies."""
+    ledger = EscalationLedger(tmp_path / "l.jsonl")
+    ledger.record(record(6))
+    ledger.resolve(6, "S1", "escalated but still failing")
+    entries = ledger.entries("S1")
+    assert len(entries) == 2
+    assert entries[0].outcome is None
+
+
+def test_resolving_an_unescalated_card_does_nothing(tmp_path):
+    ledger = EscalationLedger(tmp_path / "l.jsonl")
+    ledger.resolve(99, "S1", "resolved")
+    assert ledger.entries("S1") == []

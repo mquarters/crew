@@ -105,11 +105,22 @@ def close_sprint(
             )
         )
 
-    entries = ledger.entries(sprint)
-    escalations = "\n".join(
-        f"#{e.card} {e.failure_class} after {e.local_attempts} local attempts: {e.detail[:120]}"
-        for e in entries
-    )
+    # Report the outcome alongside the failure. Without it an escalation reads
+    # as an unresolved failure and the retro concludes the story was shipped
+    # broken — which is what happened the first time this ran.
+    outcomes = ledger.outcomes(sprint)
+    seen: set[int] = set()
+    lines = []
+    for entry in ledger.entries(sprint):
+        if entry.card in seen:
+            continue
+        seen.add(entry.card)
+        ended = outcomes.get(entry.card) or "outcome not recorded"
+        lines.append(
+            f"#{entry.card} {entry.failure_class} after {entry.local_attempts} local "
+            f"attempts — escalation {ended}. Trigger: {entry.detail[:100]}"
+        )
+    escalations = "\n".join(lines)
     try:
         result.retro = write_retro(sprint, board_summary(board.cards(), sprint), escalations)
     except Exception as exc:  # noqa: BLE001

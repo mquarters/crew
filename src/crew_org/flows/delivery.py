@@ -308,11 +308,15 @@ def deliver_story(
                 worktree, escalation_prompt(story_text, check.failure_report)
             )
             if result.should_park:
+                # Not an outcome yet — the work is unfinished, not failed.
+                ledger.resolve(number, sprint, "parked on a usage limit")
                 outcome.blocked_reason = result.detail
                 return outcome
             check = workspace.check(worktree)
             if check.ok:
+                ledger.resolve(number, sprint, "resolved — lint and tests pass")
                 break
+            ledger.resolve(number, sprint, "escalated but still failing")
             outcome.blocked_reason = f"escalation did not resolve it: {check.failure_report[:200]}"
             return outcome
 

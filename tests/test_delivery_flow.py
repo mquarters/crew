@@ -227,8 +227,12 @@ def test_a_schema_failure_never_escalates(harness):
 
 def test_an_escalation_is_recorded_in_the_ledger(tmp_path, harness):
     harness(checks=[red(), red(), red(), green()])
-    entries = EscalationLedger(tmp_path / "ledger.jsonl").entries(SPRINT)
-    assert len(entries) == 1
+    ledger = EscalationLedger(tmp_path / "ledger.jsonl")
+    entries = ledger.entries(SPRINT)
+    # The escalation, then its outcome — append-only, so both survive.
+    assert len(entries) == 2
+    assert ledger.outcomes(SPRINT) == {6: "resolved — lint and tests pass"}
+    assert ledger.spent(SPRINT) == 1
     assert entries[0].failure_class is FailureClass.VERIFY
     # The initial attempt plus two repairs — the retro reads this to judge
     # whether escalation is buying anything.
