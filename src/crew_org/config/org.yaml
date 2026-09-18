@@ -32,6 +32,20 @@ sprint:
   escalation_budget: 3          # cards per sprint permitted to escalate
   blocked_aging_days: 3         # raise to Sponsor at sprint review beyond this
 
+design:
+  # The Architect is the role a 27B model is weakest at, and therefore the one
+  # most likely to drain the escalation budget. Small epics skip design
+  # entirely: a design note on a two-story epic costs more than it saves.
+  #
+  # An epic requires design if it exceeds ANY threshold below. Raise these to
+  # buy back escalation budget; lower them if developers start inventing
+  # conflicting approaches.
+  min_points: 13          # total story points in the epic
+  min_stories: 4          # number of stories
+  min_modules: 3          # distinct modules or packages the epic touches
+  force_label: needs:design   # Sponsor or Scrum Master can demand design
+  skip_label: no:design       # ...or waive it
+
 estimation:
   scale: [1, 2, 3, 5, 8]
   max_story_points: 8           # larger must be split, never admitted

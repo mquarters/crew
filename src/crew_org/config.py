@@ -28,7 +28,8 @@ def load_org(path: Path | None = None) -> dict[str, Any]:
 
 def _validate(org: dict[str, Any]) -> None:
     """Fail loudly at startup rather than mid-sprint."""
-    for key in ("board", "wip_limits", "sprint", "estimation", "execution", "escalation"):
+    required = ("board", "wip_limits", "sprint", "design", "estimation", "execution", "escalation")
+    for key in required:
         if key not in org:
             raise ValueError(f"org.yaml is missing required section: {key!r}")
 
@@ -47,6 +48,10 @@ def _validate(org: dict[str, Any]) -> None:
     gates = set(org["board"]["human_gates"]) - set(columns)
     if gates:
         raise ValueError(f"board.human_gates names columns not on the board: {sorted(gates)}")
+
+    design = org["design"]
+    if design["force_label"] == design["skip_label"]:
+        raise ValueError("design.force_label and design.skip_label must differ")
 
     overlap = set(org["escalation"]["never_escalate"]) & set(org["escalation"]["may_escalate"])
     if overlap:

@@ -28,6 +28,21 @@ negotiate process with each other; they follow what is written here.
 epics awaiting approval in `Inbox (Goals)` carrying `needs:human`, and the
 sprint review at `crew sprint close`.
 
+### Review and QA are two different gates
+
+They judge different things and must not be collapsed into one another:
+
+| Gate | Judges | Asks |
+|---|---|---|
+| **Code Reviewer** | the **diff** | Is this correct, does it reuse what exists, does it stay inside its card? |
+| **QA Engineer** | the **behaviour** | Does the running code satisfy each acceptance criterion as written? |
+
+A Reviewer never asks "does it work" — that is QA's evidence to produce. A QA
+Engineer never comments on style or structure — that is the Reviewer's finding
+to make. When the two disagree, both findings stand and the card returns to
+`In Progress` carrying each.
+
+
 ---
 
 ## 2. Work item taxonomy
@@ -205,3 +220,35 @@ and what was already tried.
 Blocked cards age. The Scrum Master reports aging blocked cards at every
 standup, and any card blocked longer than the configured threshold is raised to
 the Sponsor at sprint review.
+
+---
+
+## 13. When design happens
+
+Design is **rationed**, not automatic. An Architect's design note is produced
+only for epics above a complexity threshold; thresholds live in
+`config/org.yaml` under `design`.
+
+An epic requires a design note when it exceeds **any** of:
+
+- total story points,
+- number of stories,
+- distinct modules touched.
+
+Two labels override the thresholds in either direction: `needs:design` demands
+a note on an epic that would otherwise skip it, and `no:design` waives one.
+When both are present, `needs:design` wins — demanding design is the safer
+error.
+
+**Why ration it.** Architectural judgment is the work a local model does worst,
+so the Architect is both the likeliest source of escalation and the scarcest
+role in the org. Requiring a design note on every epic would drain the sprint's
+escalation budget on epics that never needed one. A two-story epic costs more
+to design than to simply build.
+
+**The tradeoff is real and is accepted deliberately.** Skipping design risks a
+developer inventing an approach that later has to be unpicked. The thresholds
+are the dial: raise them to buy back escalation budget, lower them if
+developers begin producing conflicting approaches. If neither setting works,
+the correct next move is a human gate before implementation — not a larger
+escalation budget.
