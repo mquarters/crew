@@ -18,6 +18,7 @@ from crew_org.tools.regression import (
     find_regressions,
     public_names,
     removed_public_names,
+    undeclared_changes,
 )
 
 
@@ -117,7 +118,7 @@ def test_an_existing_file_losing_names_is_reported(tmp_path):
     target.write_text(BEFORE)
     files = [Written(path="src/pkg/mod.py", content="def other():\n    pass\n")]
     found = find_regressions(tmp_path, files)
-    assert "format_performance_table" in found["src/pkg/mod.py"]
+    assert "format_performance_table" in found["src/pkg/mod.py"]["removed"]
 
 
 def test_non_python_files_are_not_checked(tmp_path):
@@ -139,13 +140,81 @@ def test_preserving_everything_passes(tmp_path):
 
 
 def test_the_message_names_the_file_and_the_lost_names():
-    body = describe({"src/pkg/mod.py": {"format_performance_table", "Card"}})
+    body = describe(
+        {"src/pkg/mod.py": {"removed": {"format_performance_table", "Card"}, "altered": set()}}
+    )
     assert "src/pkg/mod.py" in body
     assert "format_performance_table" in body
     assert "Card" in body
 
 
 def test_the_message_says_what_to_do_instead():
-    body = describe({"m.py": {"f"}})
-    assert "same name and signature" in body or "same names and signature" in body
-    assert "separate story" in body
+    body = describe({"m.py": {"removed": {"f"}, "altered": set()}})
+    assert "same signature, same body" in body
+    assert "modifies" in body
+
+
+# --- silent edits, not just deletions ------------------------------------
+
+
+def test_a_changed_body_with_the_same_name_is_caught():
+    """A rewrite that keeps every name can still replace every body."""
+    after = BEFORE.replace('    return ""', '    return "something else entirely"')
+    assert undeclared_changes(BEFORE, after, declared=set()) == {"format_performance_table"}
+
+
+def test_a_changed_signature_is_caught():
+    after = BEFORE.replace(
+        "def calculate_cycle_time_and_lead_time(card):",
+        "def calculate_cycle_time_and_lead_time(card, *, units):",
+    )
+    assert undeclared_changes(BEFORE, after, declared=set()) == {
+        "calculate_cycle_time_and_lead_time"
+    }
+
+
+def test_a_declared_change_is_allowed():
+    """Changing existing code is legitimate when it is deliberate and named."""
+    after = BEFORE.replace('    return ""', '    return "with throughput"')
+    declared = {"format_performance_table"}
+    assert undeclared_changes(BEFORE, after, declared) == set()
+
+
+def test_adding_something_new_is_not_a_change():
+    after = BEFORE + "\n\ndef calculate_throughput(cards):\n    return 0\n"
+    assert undeclared_changes(BEFORE, after, declared=set()) == set()
+
+
+def test_reformatting_a_preserved_definition_still_counts_as_a_change():
+    """Byte-for-byte is the standard: incidental rewrites are how drift enters."""
+    after = BEFORE.replace(
+        "def format_performance_table(cards):", "def format_performance_table(\n    cards,\n):"
+    )
+    assert "format_performance_table" in undeclared_changes(BEFORE, after, declared=set())
+
+
+def test_private_helpers_are_not_policed():
+    """How a module organises itself internally is the author's business."""
+    after = BEFORE.replace(
+        "def _parse_date(value):\n    return None",
+        "def _parse_date(value):\n    return value or None",
+    )
+    assert undeclared_changes(BEFORE, after, declared=set()) == set()
+
+
+def test_an_undeclared_edit_is_reported_against_the_file(tmp_path):
+    target = tmp_path / "mod.py"
+    target.write_text(BEFORE)
+    changed = BEFORE.replace('    return ""', '    return "drifted"')
+    found = find_regressions(tmp_path, [Written(path="mod.py", content=changed)])
+    assert found["mod.py"]["altered"] == {"format_performance_table"}
+
+
+def test_declaring_the_edit_clears_it(tmp_path):
+    target = tmp_path / "mod.py"
+    target.write_text(BEFORE)
+    changed = BEFORE.replace('    return ""', '    return "declared"')
+    found = find_regressions(
+        tmp_path, [Written(path="mod.py", content=changed)], declared={"format_performance_table"}
+    )
+    assert found == {}

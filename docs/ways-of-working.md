@@ -289,3 +289,47 @@ These are bounds on blast radius, and bounds are not proof. They were verified
 against a live engine rather than assumed: network blocked for test code but
 available for dependency resolution, a 4GB allocation killed at the 2GB limit,
 `/etc` unwritable, `uid` non-zero, and the host filesystem absent.
+
+---
+
+## 15. Changing code that already exists
+
+A story extends work other stories depend on. Three rules, enforced
+mechanically rather than asked for:
+
+1. **Nothing already there is deleted.** A public function, class or constant
+   that exists stays, with its name.
+2. **Nothing already there is changed silently.** A preserved definition must
+   be byte-identical unless its name is declared in `modifies`.
+3. **Declared changes are fine.** Naming what you are changing makes it
+   deliberate and reviewable; the rule is against accidents, not against change.
+
+Private helpers are exempt — how a module organises itself internally is the
+author's business.
+
+**Why this is a check and not an instruction.** The Developer returns whole
+files, which is what makes its output easy to validate and repair. The cost is
+that extending a module means rewriting it, and a model asked to add one metric
+will redesign the module it is adding to. Story #7 attempted exactly this: it
+rewrote story #6's merged code, renamed its public functions, and would have
+deleted eleven tests — including the two QA had cited as proof that #6's
+acceptance criteria were met.
+
+That change would have passed CI. Deleted tests do not fail; they stop
+existing. Lint passes, the suite passes, and coverage proving a merged story
+disappears silently. No other gate in the pipeline catches it.
+
+The prompt already forbade this and the model did it anyway on the first
+attempt. A prompt is a request; this is a guarantee.
+
+### Known limitation: whole-file rewrites do not scale
+
+Every implementation re-emits the complete contents of every file it touches,
+so generation cost grows with the size of the module rather than the size of
+the change. A module that several stories have extended is re-emitted in full
+by each subsequent story, and the larger the re-emission the more room there is
+for exactly the drift these rules exist to catch.
+
+The fix is to emit only changed definitions and splice them in, which makes
+destruction structurally impossible rather than merely detected. It is not yet
+built. Expect it to matter once a module passes a few hundred lines.

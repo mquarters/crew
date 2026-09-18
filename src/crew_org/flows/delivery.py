@@ -275,7 +275,9 @@ def deliver_story(
         # would otherwise be written to disk and only surface as other stories'
         # tests failing to import, which reads as a coding error rather than as
         # the regression it is.
-        regressions = regression.find_regressions(worktree, implementation.files)
+        regressions = regression.find_regressions(
+            worktree, implementation.files, declared=set(implementation.modifies)
+        )
         if regressions:
             failure = LocalFailure(
                 card=number,
@@ -295,16 +297,25 @@ def deliver_story(
                     detail={
                         "failure_class": "REGRESSION",
                         "attempt": outcome.attempts,
-                        "removed": {k: sorted(v) for k, v in regressions.items()},
+                        "declared": sorted(implementation.modifies),
+                        "removed": {
+                            k: sorted(v["removed"]) for k, v in regressions.items() if v["removed"]
+                        },
+                        "altered": {
+                            k: sorted(v["altered"]) for k, v in regressions.items() if v["altered"]
+                        },
                     },
                 )
             )
             if decision.disposition is Disposition.RETRY_LOCAL:
                 feedback = regression.describe(regressions)
                 continue
+            lost = sorted(
+                n for kinds in regressions.values() for names in kinds.values() for n in names
+            )
             outcome.blocked_reason = (
-                "the implementation kept deleting existing public names: "
-                + ", ".join(sorted(n for names in regressions.values() for n in names))
+                "the implementation kept rewriting existing code it had not declared: "
+                + ", ".join(lost)
             )
             return outcome
 

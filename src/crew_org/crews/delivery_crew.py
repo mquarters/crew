@@ -69,6 +69,14 @@ class FileWrite(BaseModel):
 class Implementation(BaseModel):
     summary: str = Field(description="What changed and why, for the pull request body")
     files: list[FileWrite] = Field(description="Every file to create or replace, in full")
+    modifies: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Names of EXISTING functions, classes or constants you are deliberately "
+            "changing. Leave empty when only adding. Anything you change without "
+            "naming here is treated as an accident."
+        ),
+    )
 
     @field_validator("files")
     @classmethod
@@ -122,10 +130,13 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
             "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
             "Do not change lint or tool configuration: a stricter rule you add is a "
             "rule you then have to satisfy, and that is not what the story asked for.\n"
-            "Where a file already exists, keep every public function and class it has, "
-            "with the same names and signatures, and add alongside them. Other stories "
-            "depend on that code — rewriting a module you were asked to extend deletes "
-            "work that is already merged and tested.\n"
+            "Where a file already exists, keep every existing definition byte for byte "
+            "— same name, same signature, same body — and add alongside it. Other "
+            "stories depend on that code.\n"
+            "If extending the story genuinely requires changing something that is "
+            "already there, list its name in `modifies`. That makes the change "
+            "deliberate and reviewable. Anything changed without being declared is "
+            "rejected.\n"
             "Implement only this story. Metrics belonging to other stories are not "
             "yours to add, even when they look adjacent."
             f"{repair}"
