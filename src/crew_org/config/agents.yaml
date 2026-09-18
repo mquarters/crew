@@ -28,6 +28,7 @@ product_owner:
     Inbox (Goals) until the Sponsor approves them.
   llm: crew-local
   can: [propose_epic, comment]
+  constitution: [1, 2, 10]      # roles, taxonomy, audit trail
 
 business_analyst:
   role: Business Analyst
@@ -49,6 +50,7 @@ business_analyst:
     you say so in a comment and leave it to the Product Owner.
   llm: crew-local
   can: [create_story, create_task, write_acceptance_criteria, estimate, comment]
+  constitution: [2, 3, 4, 5, 6, 10]  # taxonomy, story format, INVEST, DoR, estimation, audit
 
 architect:
   role: Architect
@@ -70,6 +72,7 @@ architect:
     never "this is hard".
   llm: crew-local
   can: [write_design, create_task, create_spike, comment]
+  constitution: [2, 9, 10, 13]  # taxonomy, escalation, audit, when design happens
 
 developer:
   role: Developer
@@ -91,6 +94,7 @@ developer:
     escalate.
   llm: crew-local
   can: [write_code, run_tests, open_pr, update_docs, file_bug, comment]
+  constitution: [7, 8, 9, 10]   # DoD, branch/PR conventions, escalation, audit
 
 qa_engineer:
   role: QA Engineer
@@ -108,6 +112,7 @@ qa_engineer:
     to make.
   llm: crew-local
   can: [run_tests, file_bug, verdict_behaviour, comment]
+  constitution: [3, 7, 10]      # story format, DoD, audit
 
 code_reviewer:
   role: Code Reviewer
@@ -126,6 +131,7 @@ code_reviewer:
     You never ask "does it work" — that is QA's evidence to produce.
   llm: crew-local
   can: [review_diff, verdict_diff, file_bug, comment]
+  constitution: [3, 7, 8, 10]   # story format, DoD, conventions, audit
 
 scrum_master:
   role: Scrum Master
@@ -144,3 +150,4 @@ scrum_master:
     against them. Never propose a larger escalation budget.
   llm: crew-draft
   can: [write_standup, write_retro, file_process_defect, comment]
+  constitution: [9, 10, 11, 12] # escalation, audit, WIP, blocked cards

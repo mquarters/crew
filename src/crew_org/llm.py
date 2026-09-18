@@ -22,10 +22,15 @@ DEFAULT_BASE_URL = "http://localhost:4000/v1"
 # The proxy requires a value; the backend ignores it. This is not a credential.
 PLACEHOLDER_KEY = "sk-not-used"
 
-# Reasoning models need headroom above their thinking. Too small a ceiling
-# returns empty content with finish_reason="length", which looks like the model
-# failing for no reason rather than like a budget problem.
-DEFAULT_MAX_TOKENS = 4096
+# Reasoning models need headroom ABOVE their thinking, and real refinement work
+# thinks hard: a single "propose epics for this goal" task was measured spending
+# 4,097 reasoning tokens and emitting 0 text tokens against a 4,096 ceiling —
+# the whole budget consumed before the answer began. CrewAI retries, so it
+# surfaces only as a slow task and a logged parse error, which is a genuinely
+# confusing way to discover a token budget problem.
+#
+# The context window is 262,144, so headroom is cheap. Spend it.
+DEFAULT_MAX_TOKENS = 16384
 
 
 def base_url() -> str:
@@ -46,3 +51,29 @@ def build_llm(alias: str = "crew-local", **overrides: Any) -> LLM:
     }
     params.update(overrides)
     return LLM(**params)
+
+
+def health() -> tuple[bool, str]:
+    """Is the proxy up?
+
+    The proxy is deliberately project-scoped — it runs in Docker for the crew
+    and is not general infrastructure — so it will not always be running. A tick
+    that fails on a dead proxy should say so plainly rather than surfacing a
+    connection error from somewhere deep inside an agent.
+    """
+    import httpx  # noqa: PLC0415
+
+    url = base_url()
+    try:
+        r = httpx.get(f"{url}/models", timeout=5.0)
+        r.raise_for_status()
+    except Exception:  # noqa: BLE001
+        return False, (
+            f"LiteLLM proxy is not answering at {url}.\n"
+            "  Start it with:  cd deploy/litellm && "
+            "SGLANG_BASE_URL=http://gx10-3703.local:8888/v1 docker compose up -d"
+        )
+    aliases = [m["id"] for m in r.json().get("data", [])]
+    if "crew-local" not in aliases:
+        return False, f"Proxy is up but has no 'crew-local' alias. Serving: {aliases}"
+    return True, f"proxy up — {', '.join(aliases)}"
