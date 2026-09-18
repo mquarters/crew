@@ -199,3 +199,62 @@ def test_content_after_reasoning_passes_and_reports_the_cost(server, monkeypatch
     r = sub.probe_chat(BASE, MODEL)
     assert r.status is Status.PASS
     assert "22 reasoning tokens" in r.detail
+
+
+# --- proxy hops ----------------------------------------------------------
+
+
+def test_reasoning_tokens_found_at_the_top_of_usage():
+    """SGLang reports it here."""
+    assert sub._reasoning_tokens({"usage": {"reasoning_tokens": 22}}) == 22
+
+
+def test_reasoning_tokens_found_nested_under_completion_details():
+    """LiteLLM nests it here, so a naive read reports zero through the proxy."""
+    payload = {"usage": {"completion_tokens_details": {"reasoning_tokens": 22}}}
+    assert sub._reasoning_tokens(payload) == 22
+
+
+def test_reasoning_tokens_absent_is_zero_not_an_error():
+    assert sub._reasoning_tokens({}) == 0
+    assert sub._reasoning_tokens({"usage": {}}) == 0
+
+
+def test_unreported_context_length_names_the_proxy_as_the_likely_cause(server, monkeypatch):
+    monkeypatch.setattr(
+        sub.httpx,
+        "get",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={"data": [{"id": MODEL}]},  # no max_model_len, as LiteLLM returns
+            request=httpx.Request("GET", f"{BASE}/models"),
+        ),
+    )
+    result = sub.probe_context(BASE, MODEL)
+    assert result.status is Status.WARN
+    assert "proxy" in (result.hint or "")
+
+
+def test_a_short_context_window_warns_about_truncation(server, monkeypatch):
+    monkeypatch.setattr(
+        sub.httpx,
+        "get",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={"data": [{"id": MODEL, "max_model_len": 4096}]},
+            request=httpx.Request("GET", f"{BASE}/models"),
+        ),
+    )
+    result = sub.probe_context(BASE, MODEL)
+    assert result.status is Status.WARN
+    assert "truncation" in (result.hint or "")
+
+
+def test_deep_is_opt_in_so_the_plain_gate_costs_nothing(server, monkeypatch):
+    """probe_crew spends real tokens; it must not run unless asked."""
+    install_post(monkeypatch, lambda _b: chat_response({"content": "ready"}))
+    monkeypatch.setattr(
+        sub, "probe_crew", lambda *a, **k: pytest.fail("deep probe ran without --deep")
+    )
+    checks = [r.check for r in sub.run_all(BASE)]
+    assert "crewai round-trip" not in checks

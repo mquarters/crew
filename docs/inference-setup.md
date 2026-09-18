@@ -91,6 +91,42 @@ repeatedly, because one lucky pass proves nothing.
 Do not proceed past a `FAIL`. A substrate failure here reappears later as
 unexplained agent failures that are far more expensive to diagnose.
 
+## Proxy verification (2026-09-18)
+
+The full stack is proven end to end: CrewAI -> LiteLLM -> SGLang -> Qwen3.8-27B,
+returning a validated Pydantic model.
+
+```
+crew doctor --base-url http://localhost:4000/v1 --model crew-local --deep
+  endpoint reachable   pass   serving 'crew-local' (+2 more)
+  chat completion      pass   responded 'ready' after 22 reasoning tokens
+  tool calling         pass   called set_card_status{'card': 42, ...}
+  constrained JSON     pass   5/5 schema-valid
+  context length       warn   not reported by this endpoint
+  thinking control     pass   enable_thinking=false honoured
+  crewai round-trip    pass   typed output, 3 stories, 624 tokens
+```
+
+Tool calling and constrained JSON both survive the proxy hop — that was the
+open question, since `drop_params` strips parameters the backend does not
+support.
+
+**`crew-mechanical` works.** The alias passes
+`chat_template_kwargs: {"enable_thinking": false}` through `extra_body`, and it
+is *not* stripped by `drop_params`:
+
+| Alias | completion tokens | reasoning tokens |
+|---|---|---|
+| `crew-local` | 25 | 22 |
+| `crew-mechanical` | 2 | 0 |
+
+So thinking really is a per-request lever rather than a fixed tax. Route
+mechanical work — routing, labelling, field-setting — through
+`crew-mechanical`, and keep `crew-local` for judgment.
+
+The context-length warning is expected and benign: LiteLLM does not surface the
+backend's window. The Spark reports 262,144 when probed directly.
+
 ## 3. Start the LiteLLM proxy
 
 ```bash

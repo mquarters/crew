@@ -139,6 +139,9 @@ def doctor(
         None, "--host", help="Probe common ports on this host to find the endpoint."
     ),
     model: str = typer.Option(None, "--model", help="Override the served model name."),
+    deep: bool = typer.Option(
+        False, "--deep", help="Also run a real CrewAI crew end to end. Costs tokens."
+    ),
 ) -> None:
     """Validate the inference substrate before anything is built on it.
 
@@ -163,7 +166,7 @@ def doctor(
             raise typer.Exit(code=1)
         console.print(f"[green]Found[/] {base_url}")
 
-    results = run_all(base_url, model)
+    results = run_all(base_url, model, deep=deep)
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
     table.add_column("check")

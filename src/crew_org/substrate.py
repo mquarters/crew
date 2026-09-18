@@ -99,6 +99,17 @@ def _chat(base_url: str, model: str, **body) -> dict:
     return r.json()
 
 
+def _reasoning_tokens(response: dict) -> int:
+    """Reasoning token count, wherever this hop happens to put it.
+
+    SGLang reports it at the top of `usage`; LiteLLM nests it under
+    `completion_tokens_details`.
+    """
+    usage = response.get("usage") or {}
+    details = usage.get("completion_tokens_details") or {}
+    return usage.get("reasoning_tokens") or details.get("reasoning_tokens") or 0
+
+
 def probe_chat(base_url: str, model: str) -> ProbeResult:
     """0b — a basic completion round-trips *with content*.
 
@@ -118,7 +129,7 @@ def probe_chat(base_url: str, model: str) -> ProbeResult:
         choice = out["choices"][0]
         text = choice["message"].get("content") or ""
         finish = choice.get("finish_reason")
-        reasoning = (out.get("usage") or {}).get("reasoning_tokens") or 0
+        reasoning = _reasoning_tokens(out)
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
             check="chat completion", status=Status.FAIL, detail=f"{type(exc).__name__}: {exc}"
@@ -154,7 +165,11 @@ def probe_context(base_url: str, model: str) -> ProbeResult:
         )
     if not length:
         return ProbeResult(
-            check="context length", status=Status.WARN, detail="server did not report a limit"
+            check="context length",
+            status=Status.WARN,
+            detail="not reported by this endpoint",
+            hint="Expected when probing through a proxy — LiteLLM does not surface the "
+            "backend's window. Probe the backend directly to confirm it.",
         )
     if length < 16384:
         return ProbeResult(
@@ -182,7 +197,7 @@ def probe_thinking_control(base_url: str, model: str) -> ProbeResult:
             temperature=0.0,
             chat_template_kwargs={"enable_thinking": False},
         )
-        reasoning = (out.get("usage") or {}).get("reasoning_tokens") or 0
+        reasoning = _reasoning_tokens(out)
         text = out["choices"][0]["message"].get("content") or ""
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
@@ -350,7 +365,71 @@ def probe_structured_output(
     )
 
 
-def run_all(base_url: str, model: str | None = None) -> list[ProbeResult]:
+def probe_crew(base_url: str, model: str) -> ProbeResult:
+    """The whole stack: CrewAI -> proxy -> server -> a validated Pydantic model.
+
+    Every earlier probe can pass while this fails, because CrewAI adds its own
+    prompt scaffolding and output parsing on top. Costs real tokens and a minute
+    or so, so it is opt-in.
+    """
+    try:
+        from crewai import Agent, Crew, Process, Task  # noqa: PLC0415
+        from pydantic import BaseModel as _BaseModel  # noqa: PLC0415
+
+        from crew_org.llm import build_llm  # noqa: PLC0415
+
+        class _Probe(_BaseModel):
+            title: str
+            stories: list[str]
+
+        alias = model.removeprefix("openai/")
+        agent = Agent(
+            role="Product Owner",
+            goal="Turn a goal statement into one coherent epic.",
+            backstory="You decompose by outcome, never by architectural layer.",
+            llm=build_llm(alias, base_url=base_url),
+            verbose=False,
+        )
+        task = Task(
+            description=(
+                "Goal: report how the crew is performing.\n"
+                "Propose exactly ONE epic that delivers part of it."
+            ),
+            expected_output="An epic title and candidate story titles.",
+            agent=agent,
+            output_pydantic=_Probe,
+        )
+        result = Crew(
+            agents=[agent], tasks=[task], process=Process.sequential, verbose=False
+        ).kickoff()
+    except Exception as exc:  # noqa: BLE001
+        return ProbeResult(
+            check="crewai round-trip",
+            status=Status.FAIL,
+            detail=f"{type(exc).__name__}: {exc}"[:160],
+            hint="The substrate is sound but CrewAI cannot drive it. Check the alias "
+            "exists on the proxy and that max_tokens leaves room above reasoning.",
+        )
+
+    epic = getattr(result, "pydantic", None)
+    if epic is None:
+        return ProbeResult(
+            check="crewai round-trip",
+            status=Status.FAIL,
+            detail="crew ran but returned no typed output",
+            hint="output_pydantic did not parse. Expect the SCHEMA repair path to carry "
+            "the load, and tighten task descriptions.",
+        )
+    usage = getattr(result, "token_usage", None)
+    cost = f", {usage.total_tokens} tokens" if usage else ""
+    return ProbeResult(
+        check="crewai round-trip",
+        status=Status.PASS,
+        detail=f"typed output: {epic.title!r}, {len(epic.stories)} stories{cost}",
+    )
+
+
+def run_all(base_url: str, model: str | None = None, *, deep: bool = False) -> list[ProbeResult]:
     """Run the Phase 0 gate in order. Later checks are skipped if earlier ones fail."""
     reach, served = probe_models(base_url)
     results = [reach]
@@ -382,4 +461,6 @@ def run_all(base_url: str, model: str | None = None) -> list[ProbeResult]:
     results.append(probe_structured_output(base_url, target))
     results.append(probe_context(base_url, target))
     results.append(probe_thinking_control(base_url, target))
+    if deep:
+        results.append(probe_crew(base_url, target))
     return results
