@@ -466,6 +466,7 @@ def deliver(
             repo=repo,
             dry_run=not land,
             limit=limit,
+            repos=set(org.get("delivery", {}).get("repos") or [repo]),
         )
 
     console.print()
