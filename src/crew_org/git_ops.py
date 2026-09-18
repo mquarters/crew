@@ -3,11 +3,13 @@
 Every write an agent makes to a repository passes through here, which makes this
 the one place the "never push to main" rail can be enforced in code.
 
-That matters more than it should: branch protection and rulesets both require
-GitHub Pro on a private repository, so on a free private repo the platform will
-happily accept a push to main. Until protection is available, this guard is the
-only thing standing in the way — so it refuses rather than warns, and it is
-never given an override flag.
+Branch protection on GitHub is the outer rail: required review, required
+`tests` check, no force-push, no deletion. This guard is the inner one. It
+matters because protection only rejects a push *after* an agent has decided to
+make it — the failure then arrives as a confusing tool error mid-task, rather
+than as a clear refusal at the point of the mistake.
+
+It refuses rather than warns, and has deliberately no override flag.
 """
 
 from __future__ import annotations

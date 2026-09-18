@@ -184,8 +184,10 @@ for repo in "$CREW_REPO" "$PILOT_REPO"; do
       -F "restrictions=" >/dev/null 2>&1; then
     ok "${repo}: main protected"
   else
-    warn "${repo}: could not set protection (needs at least one commit on main, and"
-    warn "  private-repo protection requires a paid plan). Re-run after the first push."
+    warn "${repo}: could not set protection. Two common causes:"
+    warn "  - main does not exist yet; push an initial commit and re-run."
+    warn "  - the repo is private on a free plan; protection and rulesets both"
+    warn "    require GitHub Pro. Make it public, or upgrade."
   fi
 done
 
