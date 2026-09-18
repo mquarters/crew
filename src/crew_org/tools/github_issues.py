@@ -93,6 +93,37 @@ class IssueClient:
             body=body,
         )
 
+    def open_pulls(self, repo: str) -> list[dict[str, Any]]:
+        response = self._client.get(
+            f"{API}/repos/{self.owner}/{repo}/pulls?state=open&per_page=100"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def pull_diff(self, repo: str, number: int) -> str:
+        response = self._client.get(
+            f"{API}/repos/{self.owner}/{repo}/pulls/{number}",
+            headers={"Accept": "application/vnd.github.v3.diff"},
+        )
+        response.raise_for_status()
+        return response.text
+
+    def pull_reviews(self, repo: str, number: int) -> list[dict[str, Any]]:
+        response = self._client.get(
+            f"{API}/repos/{self.owner}/{repo}/pulls/{number}/reviews?per_page=100"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def create_review(self, repo: str, number: int, *, event: str, body: str) -> dict[str, Any]:
+        """Submit a review. `event` is APPROVE, REQUEST_CHANGES or COMMENT."""
+        return self._request(
+            "POST",
+            f"/repos/{self.owner}/{repo}/pulls/{number}/reviews",
+            event=event,
+            body=body,
+        )
+
     def sub_issues(self, repo: str, number: int) -> list[dict[str, Any]]:
         response = self._client.get(
             f"{API}/repos/{self.owner}/{repo}/issues/{number}/sub_issues?per_page=100"

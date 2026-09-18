@@ -124,3 +124,21 @@ def test_secret_hygiene_rules_are_actually_installed():
     for rule in (".env", "*.pem", "*.key"):
         assert rule in gitignore, f".gitignore does not exclude {rule}"
     assert "!.env.example" in gitignore, ".env.example must stay committed as the template"
+
+
+def test_an_unrecognised_sandbox_mode_fails_at_startup(tmp_path):
+    """A typo would otherwise silently disable the sandbox."""
+    import yaml
+
+    from crew_org.config import load_org
+
+    org = yaml.safe_load((CONFIG_DIR / "org.yaml").read_text())
+    org["sandbox"]["mode"] = "requried"
+    path = tmp_path / "org.yaml"
+    path.write_text(yaml.safe_dump(org))
+    with pytest.raises(ValueError, match="sandbox.mode must be"):
+        load_org(path)
+
+
+def test_the_shipped_config_sandboxes_by_default():
+    assert load_org()["sandbox"]["mode"] == "required"

@@ -312,6 +312,46 @@ def auth() -> None:
 
 
 @app.command()
+def review(
+    repo: str = typer.Option(None, "--repo", help="Defaults to the pilot repo."),
+) -> None:
+    """Review every open pull request that has no crew verdict yet.
+
+    Human-authored pull requests are reviewed on the same terms as the crew's.
+    """
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env
+    from crew_org.flows.review import review_open_pulls
+    from crew_org.llm import health
+    from crew_org.tools.github_issues import IssueClient
+
+    ok, message = health()
+    if not ok:
+        console.print(f"[red]{message}[/]")
+        raise typer.Exit(code=1)
+
+    env = load_env()
+    token, identity = resolve_credentials(env)
+    owner = env["GITHUB_OWNER"]
+    repo = repo or env.get("PILOT_REPO", "crew")
+
+    console.print(f"[dim]acting as {escape(identity)} · reviewing {owner}/{repo}[/]")
+    sink = EventSink(VAR / "events" / "review.jsonl")
+    result = review_open_pulls(IssueClient(token, owner), sink, repo=repo, bot_login=identity)
+
+    console.print()
+    for outcome in result.reviewed:
+        mark = "[green]approved[/]" if outcome.approved else "[yellow]changes requested[/]"
+        console.print(f"PR #{outcome.pr} — {mark}, {outcome.findings} findings")
+    for outcome in result.skipped:
+        console.print(f"[dim]PR #{outcome.pr} — skipped ({outcome.skipped})[/]")
+    for number, why in result.failed:
+        console.print(f"[red]PR #{number}[/] — {why}")
+    if not (result.reviewed or result.skipped or result.failed):
+        console.print("[dim]No open pull requests.[/]")
+
+
+@app.command()
 def deliver(
     land: bool = typer.Option(
         False, "--land", help="Actually commit, push and open PRs. Off by default."

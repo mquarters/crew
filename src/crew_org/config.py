@@ -53,6 +53,16 @@ def _validate(org: dict[str, Any]) -> None:
     if design["force_label"] == design["skip_label"]:
         raise ValueError("design.force_label and design.skip_label must differ")
 
+    # A typo here would silently disable the sandbox, so it fails at startup
+    # rather than the first time generated code runs.
+    sandbox = org.get("sandbox") or {}
+    mode = sandbox.get("mode", "required")
+    if mode not in ("required", "off"):
+        raise ValueError(
+            f"sandbox.mode must be 'required' or 'off', got {mode!r}. "
+            "An unrecognised value would be treated as neither."
+        )
+
     overlap = set(org["escalation"]["never_escalate"]) & set(org["escalation"]["may_escalate"])
     if overlap:
         raise ValueError(
