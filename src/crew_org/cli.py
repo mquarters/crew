@@ -311,6 +311,114 @@ def auth() -> None:
     console.print("\n[green]Token is correctly scoped.[/]")
 
 
+@app.command()
+def deliver(
+    land: bool = typer.Option(
+        False, "--land", help="Actually commit, push and open PRs. Off by default."
+    ),
+    limit: int = typer.Option(1, "--limit", help="How many stories to attempt."),
+    sprint: str = typer.Option(None, "--sprint", help="Iteration name."),
+) -> None:
+    """Take sprint stories to a pull request.
+
+    Dry by default: the work is implemented and verified in the sandbox, and the
+    diff is shown rather than landed. Pass --land when you want it to push.
+    """
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env, load_org
+    from crew_org.escalation import EscalationLedger, EscalationPolicy
+    from crew_org.flows.delivery import deliver as run_delivery
+    from crew_org.git_ops import Workspace
+    from crew_org.llm import health
+    from crew_org.process import ProcessRules
+    from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
+    from crew_org.tools.sandbox import Sandbox
+
+    org, env = load_org(), load_env()
+
+    ok, message = health()
+    if not ok:
+        console.print(f"[red]{message}[/]")
+        raise typer.Exit(code=1)
+
+    box = Sandbox.from_config(org)
+    blocked = box.unavailable_reason()
+    if blocked:
+        console.print(f"[red]Sandbox unavailable.[/] {blocked}")
+        raise typer.Exit(code=1)
+
+    token, identity = resolve_credentials(env)
+    owner = env["GITHUB_OWNER"]
+    repo = env.get("PILOT_REPO", "crew")
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    issues = IssueClient(token, owner)
+    sprint = sprint or board.schema.field("Sprint").current_iteration()
+
+    bot = _bot_identity(token, identity)
+    ws = Workspace(owner, repo, token, bot)
+
+    console.print(
+        f"[dim]acting as {escape(identity)} · sandbox {box.mode} · "
+        f"{'LANDING' if land else 'dry run'} · {sprint}[/]"
+    )
+
+    sink = EventSink(VAR / "events" / "deliver.jsonl")
+    view = LiveView(org["board"]["columns"], budget=org["sprint"]["escalation_budget"])
+    with attach(sink, view):
+        result = run_delivery(
+            board,
+            issues,
+            sink,
+            ProcessRules.from_config(org),
+            EscalationPolicy.from_config(org),
+            EscalationLedger(VAR / "ledger" / "escalations.jsonl"),
+            ws,
+            sprint=sprint,
+            repo=repo,
+            dry_run=not land,
+            limit=limit,
+        )
+
+    console.print()
+    for outcome in result.delivered:
+        if outcome.landed:
+            console.print(f"[green]#{outcome.card}[/] → PR #{outcome.pr} on `{outcome.branch}`")
+        else:
+            path = VAR / "diffs" / f"{outcome.card}.diff"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(outcome.diff or "")
+            lines = len((outcome.diff or "").splitlines())
+            console.print(
+                f"[green]#{outcome.card}[/] verified — {lines} diff lines, nothing landed\n"
+                f"   [dim]{path}[/]"
+            )
+    for outcome in result.blocked:
+        console.print(f"[red]#{outcome.card}[/] {outcome.blocked_reason}")
+    if result.rate_limited:
+        console.print(
+            "\n[yellow]Stopped on a subscription usage limit.[/] Resume with another run."
+        )
+    if not result.delivered and not result.blocked:
+        console.print("[dim]Nothing in Sprint Backlog for this sprint.[/]")
+
+
+def _bot_identity(token: str, identity: str):
+    """Resolve the bot's numeric id, which GitHub needs for commit attribution."""
+    import httpx
+
+    from crew_org.git_ops import BotIdentity
+
+    login = identity
+    response = httpx.get(
+        f"https://api.github.com/users/{login}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    return BotIdentity(login=login, user_id=response.json()["id"])
+
+
 @sprint_app.command("start")
 def sprint_start(
     sprint: str = typer.Option(

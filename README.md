@@ -24,13 +24,42 @@ every agent follows. Process constants live in
 ## Usage
 
 ```
-crew tick             # drain every actionable card until the board is stable
-crew sprint start
-crew sprint close
+crew doctor --host <spark>     # prove the inference substrate before trusting it
+crew auth                      # verify the crew's credential, and what it must NOT do
+crew tick                      # goals become epics; approved epics become stories
+crew sprint start              # fill the sprint from approved epics
+crew deliver                   # implement a story and show the diff
+crew deliver --land            # ...and actually open the pull request
 ```
 
 A tick runs to quiescence. The human controls when the process runs, not the
 individual transitions between states.
+
+`crew deliver` is **dry by default**: the work is implemented and verified in a
+sandbox, and the diff is written to `var/diffs/` rather than landed. Passing
+`--land` is a deliberate act.
+
+## The two gates
+
+Everything else is the crew's. The Sponsor:
+
+1. **Approves epics** — each proposed epic is a card in `Inbox (Goals)` labelled
+   `needs:human`. Move it to `Needs Refinement` to approve, close it to reject.
+   Approving an epic *is* the sprint scope decision; nothing asks again.
+2. **Reviews the increment** at sprint close.
+
+Stories, estimates, sprint contents, implementation, review and merge are not
+Sponsor decisions. A manager reading eight stories to understand a sprint has
+been put back into the work.
+
+## Running generated code
+
+Testing what the crew writes means executing code an LLM wrote, so it runs in a
+container with no network during tests, a non-root user, a read-only root
+filesystem, dropped capabilities and hard resource limits. **When no container
+engine is available the check fails rather than falling back to the host** — a
+silent fallback looks protected while running arbitrary code as you. See §14 of
+the constitution.
 
 ## Inference
 
