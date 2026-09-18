@@ -63,6 +63,32 @@ def load_token(env_path: Path | None = None) -> str | None:
     return None
 
 
+def resolve_credentials(env: dict[str, str] | None = None) -> tuple[str, str]:
+    """The token the crew should act with, and a description of that identity.
+
+    Prefers the GitHub App: a PAT always acts as the human who created it, so
+    the crew's work would be attributed to the Sponsor and the Sponsor could not
+    approve the crew's pull requests.
+    """
+    from crew_org.config import load_env  # noqa: PLC0415
+    from crew_org.github_app import AppCredentials, AppTokenProvider  # noqa: PLC0415
+
+    env = env if env is not None else load_env()
+
+    creds = AppCredentials.from_env(env)
+    if creds is not None:
+        provider = AppTokenProvider(creds)
+        return provider.token(), provider.identity()
+
+    token = load_token()
+    if not token:
+        raise RuntimeError(
+            "No credentials. Configure a GitHub App (preferred) or a fine-grained "
+            "token — see docs/agent-auth.md."
+        )
+    return token, "personal access token"
+
+
 def _get(token: str, path: str) -> httpx.Response:
     return httpx.get(
         f"{API}{path}",

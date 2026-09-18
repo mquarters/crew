@@ -50,7 +50,7 @@ def tick(
 
     # The proxy is project-scoped and will not always be running. Say so plainly
     # rather than surfacing a connection error from deep inside an agent.
-    from crew_org.auth import load_token
+    from crew_org.auth import resolve_credentials
     from crew_org.config import load_env
     from crew_org.flows.board_flow import tick as run_tick
     from crew_org.llm import health
@@ -64,10 +64,12 @@ def tick(
     console.print(f"[dim]{message}[/]")
 
     env = load_env()
-    token = load_token()
-    if not token:
-        console.print("[red]No GITHUB_TOKEN.[/] Run [bold]crew auth[/] for what is needed.")
-        raise typer.Exit(code=2)
+    try:
+        token, identity = resolve_credentials(env)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+    console.print(f"[dim]acting as {identity}[/]")
 
     owner = env["GITHUB_OWNER"]
     board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
@@ -243,17 +245,16 @@ def doctor(
 def auth() -> None:
     """Verify the credential the agents use — including what it must NOT do."""
     from crew_org.auth import Status as AuthStatus
-    from crew_org.auth import load_token, verify
+    from crew_org.auth import resolve_credentials, verify
     from crew_org.config import load_env
 
     env = load_env()
-    token = load_token()
-    if not token:
-        console.print(
-            "[red]No GITHUB_TOKEN.[/] Create a fine-grained token and add it to .env — "
-            "see [bold]docs/agent-auth.md[/] for the exact permissions."
-        )
-        raise typer.Exit(code=2)
+    try:
+        token, identity = resolve_credentials(env)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(code=2) from exc
+    console.print(f"[dim]identity: {identity}[/]")
 
     owner = env.get("GITHUB_OWNER")
     if not owner:

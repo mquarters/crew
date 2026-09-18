@@ -87,21 +87,81 @@ is decided by your repository role, not by the token's permissions. That is why
 `enforce_admins` is switched on for `sprint-metrics` — that, not the token, is
 what makes "agents never push to main" true there.
 
-## Step 2 — a machine account (before Phase 3)
+## Step 2 — a GitHub App (the crew's real identity)
 
-Needed to solve problem 2. Create a second GitHub account (e.g. `mquarters-crew`), invite it to the
-`mqucifer` organization with the **Write** role — never Owner — and issue the
-fine-grained token above from *that* account instead.
+A personal access token **always acts as the human who created it**. There is no
+way to make one act as anyone else. So while the crew runs on a PAT, every issue
+it files and every comment it writes is attributed to the Sponsor — the audit
+trail claims the Sponsor wrote the epic proposals, which is exactly the
+separation this design exists to create.
 
-Then:
+It also breaks the review gate. GitHub forbids approving your own pull request,
+so if the Developer agent opens a PR as the Sponsor and the Reviewer agent
+approves as the Sponsor, the approval is rejected and the PR can only merge by
+admin bypass.
 
-- the crew authors commits and PRs as the machine account,
-- **you** supply the approving review, satisfying branch protection honestly,
-- the audit trail attributes the work to the crew rather than to you,
-- revoking the crew's access is one click and does not touch your own.
+A **GitHub App** fixes both. It has its own `crew[bot]` identity, costs nothing
+and consumes no seat, and mints short-lived installation tokens (one hour)
+rather than holding a long-lived credential.
 
-`crew auth` warns rather than fails when the token's login differs from the
-board owner, because at that point the mismatch is the intended state.
+### Create it
+
+**https://github.com/organizations/mqucifer/settings/apps/new**
+
+| Setting | Value |
+|---|---|
+| Name | `crew` (the bot becomes `crew[bot]`) |
+| Homepage URL | the crew repo URL |
+| Webhook | **uncheck Active** — the crew polls; it has no endpoint to receive hooks |
+| Where can it be installed | Only on this account |
+
+**Repository permissions:**
+
+| Permission | Level |
+|---|---|
+| Contents | Read and write |
+| Issues | Read and write |
+| Pull requests | Read and write |
+| Metadata | Read-only *(automatic)* |
+
+**Organization permissions:**
+
+| Permission | Level |
+|---|---|
+| Projects | Read and write |
+
+Not Administration.
+
+### Install and configure
+
+1. Create the app, then **Install App** → the `mqucifer` organization → *Only
+   select repositories* → `crew`, `sprint-metrics`.
+2. On the app's settings page, **Generate a private key**. A `.pem` downloads.
+3. Move it somewhere gitignored — `.secrets/crew-app.pem` in this repo is
+   already covered by `.gitignore`.
+4. Put the App ID (top of the app settings page) in `.env`:
+
+```
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY=.secrets/crew-app.pem
+GITHUB_APP_INSTALLATION_ID=        # discovered automatically if blank
+```
+
+`crew auth` and `crew tick` prefer the App whenever it is configured and fall
+back to the PAT otherwise, so this can be switched on without changing
+anything else. Both print the identity they are acting as — if it still says
+`personal access token`, the App is not being picked up.
+
+### What stays the Sponsor's
+
+Git *commit* authorship comes from git config, not from the token, so agent
+commits must set the author explicitly to be attributed to the bot:
+
+```
+crew[bot] <APP_ID+crew[bot]@users.noreply.github.com>
+```
+
+Pushes, issues, comments and reviews carry the bot identity automatically.
 
 ## Rotation
 
