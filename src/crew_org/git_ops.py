@@ -14,7 +14,12 @@ It refuses rather than warns, and has deliberately no override flag.
 
 from __future__ import annotations
 
+import base64
 import re
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 
 # Branches an agent may never write to directly, under any circumstances.
 PROTECTED_BRANCHES = frozenset({"main", "master", "trunk", "release", "develop"})
@@ -76,3 +81,180 @@ def validate_branch_name(branch: str) -> None:
         raise BranchNameError(
             f"{match.group('type')!r} is not one of: {', '.join(sorted(BRANCH_TYPES))}"
         )
+
+
+# --- working copies ------------------------------------------------------
+
+# Absolute, because git subcommands run with cwd set to the clone: a relative
+# worktree path would be created inside the clone rather than beside it.
+WORK_ROOT = Path("var").resolve()
+CLONES = WORK_ROOT / "repos"
+WORKTREES = WORK_ROOT / "worktrees"
+
+# git waits forever on a prompt; fail instead.
+NO_PROMPT = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "GCM_INTERACTIVE": "never"}
+
+
+class GitError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class BotIdentity:
+    """Who the crew's commits are authored by.
+
+    Commit authorship comes from git config, not from the token, so it must be
+    set explicitly or the work is attributed to whoever runs the tick.
+    """
+
+    login: str
+    user_id: int
+
+    @property
+    def name(self) -> str:
+        return self.login
+
+    @property
+    def email(self) -> str:
+        return f"{self.user_id}+{self.login}@users.noreply.github.com"
+
+    @property
+    def author(self) -> str:
+        return f"{self.name} <{self.email}>"
+
+
+def _auth_header(token: str) -> str:
+    """Basic auth for a GitHub App installation token."""
+    encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return f"Authorization: Basic {encoded}"
+
+
+def _run(args: list[str], *, cwd: Path | None = None, token: str | None = None) -> str:
+    """Run git, with credentials supplied per-command.
+
+    The token is passed with -c http.extraheader rather than embedded in the
+    remote URL, so it is never written into .git/config where it would outlive
+    its hour and end up in a backup.
+    """
+    import os  # noqa: PLC0415
+
+    command = ["git"]
+    if token:
+        command += ["-c", f"http.extraheader={_auth_header(token)}"]
+    command += args
+
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **NO_PROMPT},
+    )
+    if result.returncode != 0:
+        # Never echo the command: it carries the credential.
+        raise GitError(f"git {args[0]} failed: {result.stderr.strip()[:300]}")
+    return result.stdout.strip()
+
+
+class Workspace:
+    """An isolated worktree for one card.
+
+    Each developer agent works in its own worktree so concurrent cards cannot
+    see or stomp each other's changes.
+    """
+
+    def __init__(self, owner: str, repo: str, token: str, identity: BotIdentity) -> None:
+        self.owner = owner
+        self.repo = repo
+        self.token = token
+        self.identity = identity
+        self.clone = CLONES / repo
+        self.path: Path | None = None
+        self.branch: str | None = None
+
+    @property
+    def url(self) -> str:
+        return f"https://github.com/{self.owner}/{self.repo}.git"
+
+    def _ensure_clone(self) -> None:
+        if (self.clone / ".git").exists():
+            _run(["fetch", "origin", "--prune"], cwd=self.clone, token=self.token)
+            return
+        self.clone.parent.mkdir(parents=True, exist_ok=True)
+        _run(["clone", self.url, str(self.clone)], token=self.token)
+
+    def _default_branch(self) -> str:
+        """The repo's default branch, asked rather than assumed."""
+        try:
+            ref = _run(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=self.clone)
+            return ref.rsplit("/", 1)[-1]
+        except GitError:
+            _run(["remote", "set-head", "origin", "--auto"], cwd=self.clone, token=self.token)
+            ref = _run(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=self.clone)
+            return ref.rsplit("/", 1)[-1]
+
+    def open(self, branch: str) -> Path:
+        """Create a clean worktree on a new branch off origin/main."""
+        assert_writable(branch)
+        validate_branch_name(branch)
+        self._ensure_clone()
+
+        path = (WORKTREES / branch.replace("/", "__")).resolve()
+        if path.exists():
+            self.close(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        _run(
+            ["worktree", "add", "-B", branch, str(path), "origin/HEAD"],
+            cwd=self.clone,
+            token=self.token,
+        )
+        self.path, self.branch = path, branch
+        return path
+
+    def commit(self, message: str) -> bool:
+        """Commit everything in the worktree. False if there was nothing to commit."""
+        if self.path is None:
+            raise GitError("no worktree open")
+        _run(["add", "-A"], cwd=self.path)
+        if not _run(["status", "--porcelain"], cwd=self.path):
+            return False
+        _run(
+            [
+                "-c",
+                f"user.name={self.identity.name}",
+                "-c",
+                f"user.email={self.identity.email}",
+                "commit",
+                "-m",
+                message,
+                "--author",
+                self.identity.author,
+            ],
+            cwd=self.path,
+        )
+        return True
+
+    def push(self) -> None:
+        if self.path is None or self.branch is None:
+            raise GitError("no worktree open")
+        assert_writable(self.branch)
+        _run(["push", "-u", "origin", self.branch], cwd=self.path, token=self.token)
+
+    def close(self, path: Path | None = None) -> None:
+        """Remove the worktree. The branch and its commits survive on the remote."""
+        target = path or self.path
+        if target is None:
+            return
+        try:
+            _run(["worktree", "remove", "--force", str(target)], cwd=self.clone)
+        except GitError:
+            shutil.rmtree(target, ignore_errors=True)
+        if target == self.path:
+            self.path = None
+
+    def __enter__(self) -> Workspace:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
