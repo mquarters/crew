@@ -113,7 +113,7 @@ class FakeWorkspace:
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
     """Everything the loop needs, with the model and the shell faked out."""
-    calls = {"implement": 0, "escalate": 0, "feedback": []}
+    calls = {"implement": 0, "escalate": 0, "feedback": [], "context": []}
 
     def make(
         *, checks, implement=None, escalate_result=None, cards=None, dry_run=False, limit=None
@@ -126,6 +126,7 @@ def harness(tmp_path, monkeypatch):
         def fake_implement(story_text, *, context, feedback=""):
             calls["implement"] += 1
             calls["feedback"].append(feedback)
+            calls["context"].append(context)
             if implement:
                 return implement(calls["implement"])
             return IMPL
@@ -398,3 +399,53 @@ def test_a_failure_event_records_why_not_only_what(harness):
     assert "2 failed in test_metrics.py" in decided.detail["output"]
     assert decided.detail["reason"]
     assert decided.detail["failing_commands"] == ["pytest"]
+
+
+# --- the repair must see its own work -----------------------------------
+
+
+def test_the_first_attempt_gets_a_listing_without_source(tmp_path):
+    """A fresh implementation does not need the files it has not written."""
+    from crew_org.flows.delivery import repository_context
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/mod.py").write_text("SENTINEL = 1\n")
+    context = repository_context(tmp_path)
+    assert "src/mod.py" in context
+    assert "SENTINEL" not in context
+
+
+def test_a_repair_is_shown_the_current_file_contents(tmp_path):
+    """Regression: repairs were given the pre-implementation listing, so they
+    were fixing code they could not read — two attempts failed identically
+    before escalation was reached."""
+    from crew_org.flows.delivery import repository_context
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/mod.py").write_text("SENTINEL = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_mod.py").write_text("ASSERTION = 2\n")
+    context = repository_context(tmp_path, include_source=True)
+    assert "SENTINEL" in context
+    assert "ASSERTION" in context
+
+
+def test_the_source_shown_to_a_repair_is_bounded(tmp_path):
+    """A large tree must not crowd out the failure it is meant to fix."""
+    from crew_org.flows import delivery
+
+    (tmp_path / "src").mkdir()
+    for i in range(40):
+        (tmp_path / f"src/mod{i}.py").write_text("x = 1\n" * 2000)
+    context = delivery.repository_context(tmp_path, include_source=True)
+    assert len(context) < delivery.MAX_SOURCE_CHARS * 2
+
+
+def test_context_is_recomputed_on_every_attempt(harness):
+    """Stale context is what made repairs non-convergent: a repair given the
+    pre-implementation listing is fixing code it cannot read."""
+    _, _, _, _, calls, _ = harness(checks=[red(), green()])
+    assert len(calls["context"]) == 2
+    # The first pass has nothing written yet; the repair is shown what exists.
+    assert "Current source and tests" not in calls["context"][0]
+    assert "Current source and tests" in calls["context"][1]

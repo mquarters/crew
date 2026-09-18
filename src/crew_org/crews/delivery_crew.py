@@ -104,6 +104,10 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
     agents = build_agents("developer")
     repair = (
         f"\n\nA previous attempt failed. Fix it.\n\n{feedback}\n\n"
+        "The repository section above shows what that attempt actually wrote. "
+        "Work from it: change what is broken and keep the rest, rather than "
+        "redesigning the module layout — a layout change that leaves the tests "
+        "importing from the old location fails in exactly the same way.\n"
         "Return the complete corrected files, not a patch."
         if feedback
         else ""
@@ -115,7 +119,9 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
             "Write the test that expresses each acceptance criterion, then the code "
             "that satisfies it. Return every file you create or change, in full — "
             "content is written verbatim, so partial files destroy the original.\n"
-            "Match the surrounding code's idiom. Do not widen scope beyond the story."
+            "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
+            "Do not change lint or tool configuration: a stricter rule you add is a "
+            "rule you then have to satisfy, and that is not what the story asked for."
             f"{repair}"
         ),
         expected_output="A summary and the complete contents of every file to write.",

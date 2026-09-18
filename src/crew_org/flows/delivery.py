@@ -41,6 +41,9 @@ STORY_TYPE = "Story"
 # Files worth showing the Developer so it writes code that fits in.
 CONTEXT_FILES = ("pyproject.toml", "README.md")
 MAX_CONTEXT_FILES = 40
+# Source and tests are shown in full on a repair, bounded so a large tree does
+# not crowd out the failure itself.
+MAX_SOURCE_CHARS = 20_000
 
 
 @dataclass
@@ -141,8 +144,16 @@ def sprint_stories(cards: list[Card], sprint: str) -> list[Card]:
     )
 
 
-def repository_context(worktree: Path) -> str:
-    """What the repository looks like, so the Developer writes code that fits."""
+def repository_context(worktree: Path, *, include_source: bool = False) -> str:
+    """What the repository looks like, so the Developer writes code that fits.
+
+    On a repair, `include_source` shows the current contents of src/ and tests/.
+    Without it a repair is asked to fix code it cannot see: it reconstructs from
+    scratch, re-plans the module layout, and produces a set of files that
+    disagree with each other. Observed on the first real escalation, where two
+    repair attempts failed identically with a test importing from the package
+    root while the implementation had moved into a submodule.
+    """
     paths = sorted(
         str(p.relative_to(worktree))
         for p in worktree.rglob("*")
@@ -160,6 +171,17 @@ def repository_context(worktree: Path) -> str:
         target = worktree / name
         if target.exists():
             lines += ["", f"### {name}", "", "```", target.read_text()[:2500].strip(), "```"]
+
+    if include_source:
+        lines += ["", "### Current source and tests", ""]
+        budget = MAX_SOURCE_CHARS
+        for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
+            if ".venv" in target.parts or budget <= 0:
+                continue
+            body = target.read_text()[:budget]
+            budget -= len(body)
+            lines += [f"`{target.relative_to(worktree)}`", "", "```python", body.strip(), "```", ""]
+
     return "\n".join(lines)
 
 
@@ -206,11 +228,13 @@ def deliver_story(
         CrewEvent(kind=EventKind.AGENT_STARTED, role="Developer", card=number, summary=branch)
     )
 
-    context = repository_context(worktree)
     feedback = ""
     implementation: Implementation | None = None
 
     while True:
+        # Recomputed every pass: a repair must see the files it just wrote, or
+        # it is fixing code it cannot read.
+        context = repository_context(worktree, include_source=bool(feedback))
         try:
             implementation = implement_story(story_text, context=context, feedback=feedback)
         except Exception as exc:  # noqa: BLE001
