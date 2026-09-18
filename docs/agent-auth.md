@@ -23,7 +23,54 @@ not solve this; it needs a second account.
 
 ---
 
-## Step 1 — a fine-grained token (do this now)
+## The constraint that shapes everything below
+
+**Fine-grained tokens cannot access Projects v2 owned by a user account.**
+GitHub documents this as a known gap: the `Projects` permission exists only
+under *organization* permissions, and there is no account-level equivalent.
+
+Since the board *is* the orchestrator, this is not a detail the crew can work
+around. It forces a choice.
+
+| | Board owner | Token | Blast radius |
+|---|---|---|---|
+| **A** | Organization | Fine-grained, per-repo | Exactly the two repos, exactly four permissions |
+| **B** | Your account | Classic, `project` + `public_repo` | Every public repo you own, now and in future |
+
+### Option A — move the board to a free organization (recommended)
+
+A free GitHub organization costs nothing and fixes several things at once:
+
+- fine-grained tokens gain `Projects: Read and write` under organization
+  permissions, so the crew's credential can finally be scoped properly;
+- organizations support **project templates**, so future boards clone from a
+  configured one rather than being rebuilt field by field;
+- a machine account becomes an ordinary org member with the **Write** role,
+  which is the natural way to solve the self-approval problem below;
+- repository and project ownership stop being tangled up with your personal
+  account.
+
+Migration is mostly scriptable: repositories transfer via the API (old URLs
+redirect), and `copyProjectV2` accepts an `ownerId`, so the board copies across
+with its fields intact. Only creating the organization itself is manual —
+GitHub has no API for it.
+
+### Option B — a classic token, kept as narrow as possible
+
+Works today with no migration. If you take it, grant **only**:
+
+- `project` — the board
+- `public_repo` — write access to public repositories
+
+**Not** full `repo`. That scope reaches every private repository you can see,
+which is the blast radius this whole exercise exists to avoid.
+
+The residual risk is real but bounded while you own few public repos: the token
+can write to all of them, and that set grows silently as you create more.
+
+---
+
+## Fine-grained token permissions (Option A)
 
 Create at **https://github.com/settings/personal-access-tokens/new**
 
@@ -31,9 +78,10 @@ Create at **https://github.com/settings/personal-access-tokens/new**
 |---|---|
 | Token name | `crew-agents` |
 | Expiration | 90 days (calendar a rotation) |
-| Repository access | **Only select repositories** → `crew`, `sprint-metrics` |
+| Resource owner | **the organization** |
+| Repository access | Only select repositories → `crew`, `sprint-metrics` |
 
-**Repository permissions** — grant exactly these, and nothing else:
+**Repository permissions:**
 
 | Permission | Level | Why |
 |---|---|---|
@@ -42,32 +90,24 @@ Create at **https://github.com/settings/personal-access-tokens/new**
 | Pull requests | Read and write | opening and reviewing PRs |
 | Metadata | Read-only | mandatory, granted automatically |
 
-**Account permissions** — one only:
+**Organization permissions:**
 
 | Permission | Level | Why |
 |---|---|---|
-| Projects | Read and write | the board is the orchestrator; this is *not* part of repository permissions |
+| Projects | Read and write | the board is the orchestrator |
 
 **Do not grant Administration.** That is the permission that would let an agent
 disable branch protection.
 
-Then add it to `.env` (which is gitignored, and the pre-commit hook blocks
-tokens anyway):
+Add the token to `.env` (gitignored; the pre-commit hook blocks tokens anyway):
 
 ```
 GITHUB_TOKEN=github_pat_...
 ```
 
-Verify:
-
-```
-crew auth
-```
-
-It checks the positives — repo access, push, issues, the project board — and
-the negative that actually matters: that the token is **refused** when it tries
-to administer the repository. An over-privileged token is indistinguishable from
-a correct one until the day an agent uses it.
+Verify with `crew auth`. It checks the positives — repo access, push, issues,
+the board — and the negative that actually matters: that the token is
+**refused** when it tries to administer the repository.
 
 ### What this does and does not fix
 

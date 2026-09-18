@@ -23,6 +23,12 @@ TIMEOUT = 20.0
 # Fine-grained tokens carry per-repository, per-permission grants. Classic
 # tokens carry coarse scopes that apply to every repo the user can see, which
 # is precisely the blast radius this is meant to avoid.
+#
+# The catch: fine-grained tokens CANNOT access Projects v2 owned by a user
+# account. GitHub documents this as a known gap — the Projects permission
+# exists only under *organization* permissions. So a user-owned board forces a
+# classic token, and only an org-owned board can be driven by a fine-grained
+# one. check_project_access says so when it fails.
 FINE_GRAINED_PREFIX = "github_pat_"
 CLASSIC_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_")
 
@@ -79,8 +85,10 @@ def check_token_type(token: str) -> AuthCheck:
             check="token type",
             status=Status.WARN,
             detail="classic token — scopes apply to every repository you can see",
-            hint="Replace with a fine-grained token scoped to just the crew's repos. "
-            "A classic token's blast radius is your whole account.",
+            hint="Unavoidable while the board is user-owned: fine-grained tokens cannot "
+            "reach user-owned Projects v2. Keep the scopes to 'project' and "
+            "'public_repo' (never full 'repo'), or move the board to an organization "
+            "and switch to a fine-grained token. See docs/agent-auth.md.",
         )
     return AuthCheck(check="token type", status=Status.WARN, detail="unrecognised token format")
 
@@ -198,8 +206,10 @@ def check_project_access(token: str, owner: str, number: int) -> AuthCheck:
             check="project board",
             status=Status.FAIL,
             detail=body["errors"][0].get("message", "rejected")[:80],
-            hint="Grant the account-level Projects: Read and write permission. "
-            "It is not part of the repository permissions.",
+            hint="If this is a fine-grained token, it cannot reach a user-owned board "
+            "at all — that permission does not exist. Either use a classic token with "
+            "the 'project' scope, or move the board to an organization. "
+            "See docs/agent-auth.md.",
         )
     project = ((body.get("data") or {}).get("user") or {}).get("projectV2")
     if not project:
