@@ -81,6 +81,18 @@ class IssueClient:
             sub_issue_id=child_id,
         )
 
+    def create_pull(
+        self, repo: str, *, title: str, head: str, base: str, body: str
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/repos/{self.owner}/{repo}/pulls",
+            title=title,
+            head=head,
+            base=base,
+            body=body,
+        )
+
     def sub_issues(self, repo: str, number: int) -> list[dict[str, Any]]:
         response = self._client.get(
             f"{API}/repos/{self.owner}/{repo}/issues/{number}/sub_issues?per_page=100"

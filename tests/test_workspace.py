@@ -1,0 +1,133 @@
+"""Applying and checking an implementation. The guards matter because this code
+writes files the model chose and then executes them."""
+
+from __future__ import annotations
+
+import pytest
+
+from crew_org.crews.delivery_crew import FileWrite
+from crew_org.tools import workspace
+from crew_org.tools.workspace import CheckResult, CommandResult, apply, check, run
+
+
+def test_files_are_written_into_the_worktree(tmp_path):
+    written = apply(tmp_path, [FileWrite(path="src/pkg/mod.py", content="x = 1\n")])
+    assert written == ["src/pkg/mod.py"]
+    assert (tmp_path / "src/pkg/mod.py").read_text() == "x = 1\n"
+
+
+def test_nested_directories_are_created(tmp_path):
+    apply(tmp_path, [FileWrite(path="a/b/c/d.py", content="y\n")])
+    assert (tmp_path / "a/b/c/d.py").exists()
+
+
+def test_an_existing_file_is_replaced_in_full(tmp_path):
+    (tmp_path / "f.py").write_text("old and much longer\n")
+    apply(tmp_path, [FileWrite(path="f.py", content="new\n")])
+    assert (tmp_path / "f.py").read_text() == "new\n"
+
+
+def test_a_symlinked_escape_is_refused(tmp_path):
+    """The schema blocks '..' in a path, but a symlink can still point outside.
+    Containment is re-checked after resolution because the cost of being wrong
+    is writing outside the repository."""
+    outside = tmp_path.parent / "outside"
+    outside.mkdir(exist_ok=True)
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="outside the worktree"):
+        apply(tmp_path, [FileWrite(path="link/escaped.py", content="x\n")])
+
+
+# --- running -------------------------------------------------------------
+
+
+def test_a_successful_command_is_ok(tmp_path):
+    result = run(tmp_path, ["python3", "-c", "print('hello')"])
+    assert result.ok and "hello" in result.output
+
+
+def test_a_failing_command_carries_its_output(tmp_path):
+    result = run(tmp_path, ["python3", "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"])
+    assert not result.ok
+    assert result.code == 2
+    assert "boom" in result.output
+
+
+def test_a_hanging_command_is_killed(tmp_path):
+    """A runaway test must not hang the tick."""
+    result = run(tmp_path, ["python3", "-c", "import time; time.sleep(30)"], timeout=1)
+    assert result.timed_out and not result.ok
+
+
+def test_a_missing_command_is_reported_not_raised(tmp_path):
+    assert run(tmp_path, ["definitely-not-a-command"]).code == 127
+
+
+def test_credentials_are_not_visible_to_generated_code(tmp_path, monkeypatch):
+    """The model's code runs on this machine; it must not be handed the token
+    that can write to the repository."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_secret")
+    monkeypatch.setenv("HARMLESS", "visible")
+    result = run(
+        tmp_path,
+        [
+            "python3",
+            "-c",
+            "import os; print(os.environ.get('GITHUB_TOKEN'), os.environ.get('HARMLESS'))",
+        ],
+    )
+    assert "ghs_secret" not in result.output
+    assert "None visible" in result.output
+
+
+def test_enormous_output_is_elided_from_the_middle(tmp_path):
+    """Keep both ends: the command and the final error are the useful parts."""
+    result = run(
+        tmp_path, ["python3", "-c", f"print('A'*{workspace.MAX_OUTPUT_CHARS}); print('TAIL')"]
+    )
+    assert "elided" in result.output
+    assert result.output.endswith("TAIL")
+
+
+# --- verdicts ------------------------------------------------------------
+
+
+def ok(cmd: str) -> CommandResult:
+    return CommandResult(command=cmd, code=0, output="")
+
+
+def bad(cmd: str, output: str = "failed") -> CommandResult:
+    return CommandResult(command=cmd, code=1, output=output)
+
+
+def test_all_green_is_ok():
+    assert CheckResult(results=[ok("ruff"), ok("pytest")]).ok
+
+
+def test_any_failure_fails_the_check():
+    assert not CheckResult(results=[ok("ruff"), bad("pytest")]).ok
+
+
+def test_the_failure_report_carries_only_what_broke():
+    report = CheckResult(results=[ok("ruff"), bad("pytest", "2 failed")]).failure_report
+    assert "pytest" in report and "2 failed" in report
+    assert "ruff" not in report
+
+
+def test_a_timeout_is_named_as_such_in_the_report():
+    timed = CommandResult(command="pytest", code=-1, output="no output", timed_out=True)
+    assert "timed out" in CheckResult(results=[timed]).failure_report
+
+
+def test_a_failed_sync_stops_before_linting(tmp_path, monkeypatch):
+    """Running tests against unresolved dependencies produces noise, not signal."""
+    calls: list[list[str]] = []
+
+    def fake_run(worktree, command, *, timeout=0):
+        calls.append(command)
+        return CommandResult(command=" ".join(command), code=1, output="lock conflict")
+
+    monkeypatch.setattr(workspace, "run", fake_run)
+    result = check(tmp_path)
+    assert len(calls) == 1
+    assert not result.ok
