@@ -105,8 +105,15 @@ def render_proposal(
         "---",
         "",
         "Each epic is now a card in `Inbox (Goals)` labelled `needs:human`, nested "
-        "under this goal. **Nothing has been moved into the sprint.** Approve an epic "
-        "by moving its card to `Needs Refinement`; close it to reject.",
+        "under this goal.",
+        "",
+        "**Approve or reject each epic individually** — move its card to "
+        "`Needs Refinement` to approve, or close it to reject. They are separate "
+        "decisions; you can take some and not others.",
+        "",
+        "This goal card stays where it is. It is the parent tracker, not a card to "
+        "move, and its `needs:human` label has been cleared now that the decision "
+        "sits with the epics.",
     ]
     return "\n".join(lines)
 
@@ -260,6 +267,12 @@ def tick(
         # marker: if card creation fails halfway, the next tick retries rather
         # than recording work that did not happen.
         issues.comment(repo, number, render_proposal(card.title, proposal, epic_numbers))
+
+        # The decision has moved to the epics. Leaving needs:human on the goal
+        # would show the Sponsor four things demanding attention when only
+        # three do, and make the goal look like the card to move.
+        issues.remove_label(repo, number, NEEDS_HUMAN)
+
         result.proposed.append(number)
         sink.emit(
             CrewEvent(

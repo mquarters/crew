@@ -62,6 +62,7 @@ class FakeIssues:
         self.posted: list[tuple[int, str]] = []
         self.created: list[dict] = []
         self.nested: list[tuple[int, int]] = []
+        self.removed_labels: list[tuple[int, str]] = []
         self._existing = existing or {}
         self._next = 100
 
@@ -80,6 +81,9 @@ class FakeIssues:
 
     def add_sub_issue(self, repo: str, parent_number: int, child_id: int) -> None:
         self.nested.append((parent_number, child_id))
+
+    def remove_label(self, repo: str, number: int, label: str) -> None:
+        self.removed_labels.append((number, label))
 
     def has_comment_marked(self, repo: str, number: int, marker: str) -> bool:
         return marker in self._existing.get(number, "")
@@ -242,10 +246,24 @@ def test_the_proposal_reads_as_a_decision_not_a_transcript():
     body = render_proposal("Goal: report performance", PROPOSAL)
     assert "Report as a table" in body and "Emit JSON" in body
     assert "Outcome" in body and "Why" in body
-    # It must tell the Sponsor what to do next, and that nothing moved.
-    assert "Nothing has been moved" in body
+    # It must tell the Sponsor what to do next, on which card.
+    assert "Needs Refinement" in body
     assert "Inbox (Goals)" in body
 
 
 def test_the_marker_is_present_so_the_crew_recognises_its_own_work():
     assert render_proposal("g", PROPOSAL).startswith(EPIC_PROPOSAL_MARKER)
+
+
+def test_the_goal_hands_its_human_gate_to_the_epics(monkeypatch):
+    """Otherwise the board shows four cards demanding attention when three do,
+    and the goal looks like the card to move."""
+    issues = FakeIssues()
+    run(FakeBoard([card(1)]), issues, monkeypatch)
+    assert issues.removed_labels == [(1, "needs:human")]
+
+
+def test_the_proposal_says_the_goal_is_not_the_card_to_move(monkeypatch):
+    body = render_proposal("Goal: x", PROPOSAL, {"Report as a table": 3})
+    assert "not a card to move" in body
+    assert "individually" in body

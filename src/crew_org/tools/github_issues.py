@@ -84,6 +84,14 @@ class IssueClient:
     def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
         self._request("POST", f"/repos/{self.owner}/{repo}/issues/{number}/labels", labels=labels)
 
+    def remove_label(self, repo: str, number: int, label: str) -> None:
+        """Drop a label if present. A 404 means it was not there, which is fine."""
+        response = self._client.delete(
+            f"{API}/repos/{self.owner}/{repo}/issues/{number}/labels/{label}"
+        )
+        if response.status_code not in (200, 404):
+            raise IssueError(f"could not remove {label!r} from #{number}: {response.status_code}")
+
     def has_comment_marked(self, repo: str, number: int, marker: str) -> bool:
         """Has the crew already written this kind of comment here?
 
