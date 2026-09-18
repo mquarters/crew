@@ -5,6 +5,37 @@ by a LiteLLM proxy. Escalation runs through headless Claude Code on an existing
 subscription — there is deliberately **no `ANTHROPIC_API_KEY`** anywhere in this
 project, so escalation cannot incur metered API charges.
 
+## Verified configuration (2026-09-18)
+
+| | |
+|---|---|
+| Endpoint | `http://gx10-3703.local:8888/v1` — **not** SGLang's default 30000 |
+| Served name | `qwen3.8-27b-sglang` |
+| Context | 262,144 tokens |
+| Tool calling | working — emits well-formed `tool_calls` |
+| Constrained JSON | working — 5/5 schema-valid |
+| Reasoning | on by default; `chat_template_kwargs: {"enable_thinking": false}` disables it |
+
+### Qwen3.8 is a reasoning model, and it changes how you budget tokens
+
+Reasoning is emitted into a **separate `reasoning_content` field**, which is why
+tool calling and constrained JSON both work — SGLang's reasoning parser is
+correctly configured and thinking never contaminates the payload.
+
+But the token budget is shared. At `max_tokens=16` a trivial prompt returned
+**empty `content`** with `finish_reason="length"`: all sixteen tokens went to
+thinking. The answer never arrived.
+
+This is the failure mode to recognise, because it does not look like what it
+is — it looks like the model returning nothing for no reason. Give every agent
+headroom above its thinking; `crew doctor` now fails rather than passes on empty
+content, so the gate catches it.
+
+Thinking costs 22 tokens to answer "reply with the word ready". It is worth
+paying on judgment-heavy roles (Architect, Reviewer, story splitting) and pure
+waste on mechanical ones (routing, labelling) — hence the `crew-mechanical`
+alias.
+
 ## 1. Launch SGLang on the Spark
 
 Two flags decide whether this whole architecture works. Neither is on by

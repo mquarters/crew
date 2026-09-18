@@ -58,7 +58,8 @@ def test_unreachable_endpoint_fails_and_skips_the_rest(monkeypatch):
     )
     results = sub.run_all(BASE)
     assert results[0].status is Status.FAIL
-    assert [r.status for r in results[1:]] == [Status.SKIP] * 3
+    assert all(r.status is Status.SKIP for r in results[1:])
+    assert len(results) == 6
 
 
 def test_served_model_name_is_discovered(server, monkeypatch):
@@ -158,3 +159,43 @@ def test_intermittently_valid_output_warns_because_one_pass_proves_nothing(serve
 def test_missing_required_keys_is_not_counted_as_valid(server, monkeypatch):
     install_post(monkeypatch, lambda _b: chat_response({"content": json.dumps({"title": "x"})}))
     assert sub.probe_structured_output(BASE, MODEL, trials=3).status is Status.FAIL
+
+
+# --- reasoning models ----------------------------------------------------
+
+
+def test_empty_content_is_a_failure_not_a_pass(server, monkeypatch):
+    """A reasoning model that spends its whole budget thinking has not answered."""
+    monkeypatch.setattr(
+        sub.httpx,
+        "post",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                "usage": {"reasoning_tokens": 16},
+            },
+            request=REQUEST,
+        ),
+    )
+    r = sub.probe_chat(BASE, MODEL)
+    assert r.status is Status.FAIL
+    assert "max_tokens" in (r.hint or "")
+
+
+def test_content_after_reasoning_passes_and_reports_the_cost(server, monkeypatch):
+    monkeypatch.setattr(
+        sub.httpx,
+        "post",
+        lambda *a, **k: httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "\n\nready"}, "finish_reason": "stop"}],
+                "usage": {"reasoning_tokens": 22},
+            },
+            request=REQUEST,
+        ),
+    )
+    r = sub.probe_chat(BASE, MODEL)
+    assert r.status is Status.PASS
+    assert "22 reasoning tokens" in r.detail

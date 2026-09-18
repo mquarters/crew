@@ -12,7 +12,7 @@ model_list:
   # the backend can be repointed without touching agent definitions.
   - model_name: crew-local
     litellm_params:
-      model: openai/qwen3.8-27b          # openai/ prefix => OpenAI-compatible server
+      model: openai/qwen3.8-27b-sglang          # openai/ prefix => OpenAI-compatible server
       api_base: os.environ/SGLANG_BASE_URL
       api_key: "sk-not-used"             # SGLang ignores this; LiteLLM requires a value
       drop_params: true                  # strip params SGLang does not implement
@@ -23,12 +23,30 @@ model_list:
   # where a little variety reads better.
   - model_name: crew-draft
     litellm_params:
-      model: openai/qwen3.8-27b
+      model: openai/qwen3.8-27b-sglang
       api_base: os.environ/SGLANG_BASE_URL
       api_key: "sk-not-used"
       drop_params: true
       temperature: 0.6
       timeout: 300
+
+  # Mechanical work — routing, labelling, field-setting — where reasoning is
+  # pure cost. Qwen3 honours enable_thinking=false (verified on the Spark).
+  #
+  # UNVERIFIED THROUGH THE PROXY: chat_template_kwargs is non-standard, and
+  # drop_params may strip it. Confirm reasoning_tokens is 0 through :4000
+  # before trusting this alias, or the saving is imaginary.
+  - model_name: crew-mechanical
+    litellm_params:
+      model: openai/qwen3.8-27b-sglang
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "sk-not-used"
+      drop_params: true
+      temperature: 0.0
+      timeout: 300
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
 
 litellm_settings:
   drop_params: true

@@ -18,8 +18,9 @@ from enum import StrEnum
 import httpx
 from pydantic import BaseModel
 
-# SGLang defaults to 30000; vLLM to 8000. Assume neither — probe.
-CANDIDATE_PORTS = (30000, 8000, 8080, 40000)
+# SGLang's own default is 30000 and vLLM's is 8000, but a served instance can
+# be anywhere — this Spark runs on 8888. Assume nothing; probe.
+CANDIDATE_PORTS = (8888, 30000, 8000, 8080, 40000)
 STRUCTURED_TRIALS = 5
 TIMEOUT = 30.0
 
@@ -99,22 +100,109 @@ def _chat(base_url: str, model: str, **body) -> dict:
 
 
 def probe_chat(base_url: str, model: str) -> ProbeResult:
-    """0b — a basic completion round-trips."""
+    """0b — a basic completion round-trips *with content*.
+
+    Reasoning models spend the token budget thinking before they answer, so a
+    small `max_tokens` returns an empty `content` and a `length` finish. That
+    is a failure, not a pass — checking only for the absence of an exception
+    would wave it through.
+    """
     try:
         out = _chat(
             base_url,
             model,
             messages=[{"role": "user", "content": "Reply with the single word: ready"}],
-            max_tokens=16,
+            max_tokens=512,
             temperature=0.0,
         )
-        text = out["choices"][0]["message"]["content"]
+        choice = out["choices"][0]
+        text = choice["message"].get("content") or ""
+        finish = choice.get("finish_reason")
+        reasoning = (out.get("usage") or {}).get("reasoning_tokens") or 0
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
             check="chat completion", status=Status.FAIL, detail=f"{type(exc).__name__}: {exc}"
         )
+
+    if not text.strip():
+        return ProbeResult(
+            check="chat completion",
+            status=Status.FAIL,
+            detail=f"empty content (finish_reason={finish!r}, {reasoning} reasoning tokens)",
+            hint="The model answered with nothing. If it spent the budget reasoning, raise "
+            "max_tokens; agents need headroom above their thinking.",
+        )
+
+    note = f" after {reasoning} reasoning tokens" if reasoning else ""
     return ProbeResult(
-        check="chat completion", status=Status.PASS, detail=f"responded {text.strip()[:40]!r}"
+        check="chat completion",
+        status=Status.PASS,
+        detail=f"responded {text.strip()[:30]!r}{note}",
+    )
+
+
+def probe_context(base_url: str, model: str) -> ProbeResult:
+    """0e — how much context is there for the constitution plus issue history?"""
+    try:
+        r = httpx.get(f"{base_url}/models", timeout=TIMEOUT)
+        r.raise_for_status()
+        entry = next(m for m in r.json()["data"] if m.get("id") == model)
+        length = entry.get("max_model_len")
+    except Exception as exc:  # noqa: BLE001
+        return ProbeResult(
+            check="context length", status=Status.WARN, detail=f"could not determine: {exc}"
+        )
+    if not length:
+        return ProbeResult(
+            check="context length", status=Status.WARN, detail="server did not report a limit"
+        )
+    if length < 16384:
+        return ProbeResult(
+            check="context length",
+            status=Status.WARN,
+            detail=f"{length:,} tokens",
+            hint="Tight for a constitution plus issue history. Expect truncation failures "
+            "that look like the model being stupid.",
+        )
+    return ProbeResult(check="context length", status=Status.PASS, detail=f"{length:,} tokens")
+
+
+def probe_thinking_control(base_url: str, model: str) -> ProbeResult:
+    """Can reasoning be switched off per request?
+
+    Not a gate — a cost lever. Thinking is worth paying for on judgment-heavy
+    roles and waste on mechanical ones, but only if it can be controlled.
+    """
+    try:
+        out = _chat(
+            base_url,
+            model,
+            messages=[{"role": "user", "content": "Reply with the single word: ready"}],
+            max_tokens=512,
+            temperature=0.0,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        reasoning = (out.get("usage") or {}).get("reasoning_tokens") or 0
+        text = out["choices"][0]["message"].get("content") or ""
+    except Exception as exc:  # noqa: BLE001
+        return ProbeResult(
+            check="thinking control",
+            status=Status.WARN,
+            detail=f"request rejected: {type(exc).__name__}",
+            hint="Reasoning cannot be disabled per request; every role pays for thinking.",
+        )
+
+    if reasoning == 0 and text.strip():
+        return ProbeResult(
+            check="thinking control",
+            status=Status.PASS,
+            detail="enable_thinking=false honoured (0 reasoning tokens)",
+        )
+    return ProbeResult(
+        check="thinking control",
+        status=Status.WARN,
+        detail=f"still spent {reasoning} reasoning tokens",
+        hint="Mechanical roles will pay for thinking they do not need.",
     )
 
 
@@ -267,7 +355,13 @@ def run_all(base_url: str, model: str | None = None) -> list[ProbeResult]:
     reach, served = probe_models(base_url)
     results = [reach]
     if reach.status is Status.FAIL:
-        for check in ("chat completion", "tool calling", "constrained JSON"):
+        for check in (
+            "chat completion",
+            "tool calling",
+            "constrained JSON",
+            "context length",
+            "thinking control",
+        ):
             results.append(
                 ProbeResult(check=check, status=Status.SKIP, detail="endpoint unreachable")
             )
@@ -278,7 +372,7 @@ def run_all(base_url: str, model: str | None = None) -> list[ProbeResult]:
     chat = probe_chat(base_url, target)
     results.append(chat)
     if chat.status is Status.FAIL:
-        for check in ("tool calling", "constrained JSON"):
+        for check in ("tool calling", "constrained JSON", "context length", "thinking control"):
             results.append(
                 ProbeResult(check=check, status=Status.SKIP, detail="chat completion failed")
             )
@@ -286,4 +380,6 @@ def run_all(base_url: str, model: str | None = None) -> list[ProbeResult]:
 
     results.append(probe_tool_calling(base_url, target))
     results.append(probe_structured_output(base_url, target))
+    results.append(probe_context(base_url, target))
+    results.append(probe_thinking_control(base_url, target))
     return results
