@@ -17,7 +17,7 @@ model_list:
       api_key: "sk-not-used"             # SGLang ignores this; LiteLLM requires a value
       drop_params: true                  # strip params SGLang does not implement
       temperature: 0.1                   # process work wants determinism, not flair
-      timeout: 300
+      timeout: 1800
 
   # Same backend, looser sampling — for drafting prose (standups, release notes)
   # where a little variety reads better.
@@ -28,7 +28,7 @@ model_list:
       api_key: "sk-not-used"
       drop_params: true
       temperature: 0.6
-      timeout: 300
+      timeout: 1800
 
   # Mechanical work — routing, labelling, field-setting — where reasoning is
   # pure cost. Qwen3 honours enable_thinking=false (verified on the Spark).
@@ -43,14 +43,20 @@ model_list:
       api_key: "sk-not-used"
       drop_params: true
       temperature: 0.0
-      timeout: 300
+      timeout: 1800
       extra_body:
         chat_template_kwargs:
           enable_thinking: false
 
 litellm_settings:
   drop_params: true
-  request_timeout: 300
+  # A timeout must outlast the generation it carries, or the proxy kills work
+  # the server is still doing. The arithmetic: max_tokens / tokens-per-second.
+  # Measured at ~36 tok/s, a 16,384-token implementation takes ~460s, so 300
+  # could never have completed one — it returned 408 mid-generation while
+  # SGLang carried on, and the client retried into the same wall.
+  # 1800 leaves headroom for reasoning tokens and a slower day.
+  request_timeout: 1800
   # Agents retry through the escalation policy, not blindly at the transport
   # layer — a silent retry storm would hide the failure classification.
   num_retries: 0

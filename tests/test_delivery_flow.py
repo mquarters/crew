@@ -75,6 +75,9 @@ class FakeIssues:
     def get(self, repo, number):
         return {"body": "As a Sponsor…"}
 
+    def open_pulls(self, repo):
+        return []
+
     def comment(self, repo, number, body):
         self.comments_.append((number, body))
 
@@ -337,3 +340,46 @@ def test_the_limit_caps_how_many_stories_are_attempted(harness):
     )
     assert len(result.delivered) == 1
     assert calls["implement"] == 1
+
+
+# --- healing an interrupted run -----------------------------------------
+
+
+def in_progress(number: int, title: str = "Show metric") -> Card:
+    return Card(
+        item_id=f"S{number}",
+        number=number,
+        title=f"{title} {number}",
+        status="In Progress",
+        state="OPEN",
+        work_type="Story",
+        sprint=SPRINT,
+        points=3,
+        repo="sprint-metrics",
+    )
+
+
+def test_a_card_stranded_in_progress_returns_to_the_backlog(harness, monkeypatch):
+    """A tick can be killed mid-story. The board is the state, so the next pass
+    heals it rather than assuming it was left tidy."""
+    result, board, _, _, calls, _ = harness(checks=[green()], cards=[in_progress(6)])
+    assert result.recovered == [6]
+    assert ("S6", "Sprint Backlog") in board.moves
+
+
+def test_a_stranded_card_with_an_open_pull_request_goes_to_review(harness, monkeypatch):
+    """It is not stranded — the work landed, only the bookkeeping did not."""
+    monkeypatch.setattr(
+        FakeIssues,
+        "open_pulls",
+        lambda self, repo: [{"number": 42, "head": {"ref": "feat/6-show-metric-6"}}],
+        raising=False,
+    )
+    result, board, _, _, _, _ = harness(checks=[green()], cards=[in_progress(6)])
+    assert result.recovered == []
+    assert ("S6", "In Review") in board.moves
+
+
+def test_healing_does_not_touch_cards_that_are_where_they_belong(harness):
+    result, board, _, _, _, _ = harness(checks=[green()], cards=[story(6)])
+    assert result.recovered == []

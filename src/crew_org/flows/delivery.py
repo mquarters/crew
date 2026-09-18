@@ -67,7 +67,63 @@ class DeliveryOutcome:
 class DeliveryResult:
     delivered: list[DeliveryOutcome] = field(default_factory=list)
     blocked: list[DeliveryOutcome] = field(default_factory=list)
+    recovered: list[int] = field(default_factory=list)
     rate_limited: bool = False
+
+
+def reconcile_orphans(
+    board: ProjectClient,
+    issues: IssueClient,
+    sink: EventSink,
+    cards: list[Card],
+    *,
+    repo: str,
+) -> list[int]:
+    """Return cards stranded In Progress to the backlog.
+
+    A tick can die — killed, crashed, machine slept — and leave a card claimed
+    with nobody working it. The board is the state, so the loop heals it on the
+    next pass rather than assuming it was left tidy. This is what makes it a
+    reconciliation loop rather than a script that must not be interrupted.
+
+    A card with an open pull request is not stranded; it belongs In Review.
+    """
+    in_progress = [c for c in cards if c.status == IN_PROGRESS and c.work_type == STORY_TYPE]
+    if not in_progress:
+        return []
+
+    try:
+        open_prs = {pull["head"]["ref"]: pull["number"] for pull in issues.open_pulls(repo)}
+    except Exception:  # noqa: BLE001
+        open_prs = {}
+
+    recovered: list[int] = []
+    for card in in_progress:
+        number = card.number or 0
+        branch = branch_name(number, card.title)
+        if branch in open_prs:
+            board.set_status(card.item_id, IN_REVIEW)
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.CARD_MOVED,
+                    card=number,
+                    summary=f"already has PR #{open_prs[branch]} — moved to review",
+                    **{"from": IN_PROGRESS, "to": IN_REVIEW},
+                )
+            )
+            continue
+
+        board.set_status(card.item_id, SPRINT_BACKLOG)
+        recovered.append(number)
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.CARD_MOVED,
+                card=number,
+                summary="stranded In Progress with no PR — returned to the backlog",
+                **{"from": IN_PROGRESS, "to": SPRINT_BACKLOG},
+            )
+        )
+    return recovered
 
 
 def sprint_stories(cards: list[Card], sprint: str) -> list[Card]:
@@ -324,6 +380,12 @@ def deliver(
     """Pull stories into progress up to the WIP limit, and deliver them."""
     result = DeliveryResult()
     cards = board.cards()
+
+    # Heal before acting: an interrupted run leaves cards claimed by nobody.
+    recovered = reconcile_orphans(board, issues, sink, cards, repo=repo)
+    if recovered:
+        cards = board.cards()
+    result.recovered = recovered
     counts = board.counts(cards)
 
     for index, card in enumerate(sprint_stories(cards, sprint)):

@@ -32,6 +32,12 @@ PLACEHOLDER_KEY = "sk-not-used"
 # The context window is 262,144, so headroom is cheap. Spend it.
 DEFAULT_MAX_TOKENS = 16384
 
+# Long enough to carry DEFAULT_MAX_TOKENS at the measured throughput (~36 tok/s
+# gives ~460s for a full implementation), with headroom for reasoning tokens.
+# A timeout shorter than the generation it carries does not fail fast — it
+# fails slowly and repeatedly, because the client retries into the same wall.
+DEFAULT_TIMEOUT = 1800
+
 
 def base_url() -> str:
     return os.environ.get("CREW_LLM_BASE_URL", DEFAULT_BASE_URL)
@@ -48,6 +54,7 @@ def build_llm(alias: str = "crew-local", **overrides: Any) -> LLM:
         "base_url": base_url(),
         "api_key": os.environ.get("CREW_LLM_API_KEY", PLACEHOLDER_KEY),
         "max_tokens": DEFAULT_MAX_TOKENS,
+        "timeout": DEFAULT_TIMEOUT,
     }
     params.update(overrides)
     return LLM(**params)
