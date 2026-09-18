@@ -12,17 +12,25 @@ negotiate process with each other; they follow what is written here.
 
 ## 1. Roles and authority
 
-| Role | May create | May move cards | May escalate |
-|---|---|---|---|
-| Product Sponsor (human) | Goals | Any card, any time | n/a |
-| Product Owner | Epics, Stories | `Inbox` → `Needs Refinement` | No |
-| Business Analyst | Stories, Tasks | `Needs Refinement` → `Ready` | No |
-| Architect | Tasks, Spikes | `Ready` (design attached) | Yes |
-| Developer | Bugs | `Sprint Backlog` → `In Progress` → `In Review` | Yes |
-| QA Engineer | Bugs | `In Review` → `QA` → `Done` or back to `In Progress` | No |
-| Code Reviewer | Bugs | `In Review` → `QA` or back to `In Progress` | Yes |
-| Scrum Master | Process defects | Any card → `Blocked`; enforces WIP | No |
-| Tech Writer | Docs tasks | none | No |
+| Role | Produces | May escalate |
+|---|---|---|
+| Product Sponsor (human) | Goals; epic approval; sprint acceptance | n/a |
+| Product Owner | Epics | No |
+| Business Analyst | Stories, Tasks, acceptance criteria, estimates | No |
+| Architect | Design notes, Tasks, Spikes | Yes |
+| Developer | Code, tests, docs, PRs, Bugs | Yes |
+| QA Engineer | Behaviour verdicts, Bugs | No |
+| Code Reviewer | Diff verdicts, Bugs | Yes |
+| Scrum Master | Standups, retros, process defects | No |
+
+These are enforced as capability allow-lists in `config/agents.yaml`, not as
+prompt wording — a boundary that depends on granularity (goal vs epic vs story)
+or altitude (what vs how) is exactly what a small model blurs. A Product Owner
+*cannot* write acceptance criteria; a Business Analyst *cannot* redraw an epic.
+
+**Card movement and WIP limits are not a role.** They are deterministic rules in
+`crew_org.process`. A WIP limit an agent can decide to ignore is not a limit.
+The Scrum Master narrates; it has no authority over the board.
 
 **No agent may move a card out of a human gate.** There are exactly two gates:
 epics awaiting approval in `Inbox (Goals)` carrying `needs:human`, and the
