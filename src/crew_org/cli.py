@@ -13,6 +13,7 @@ from pathlib import Path
 import typer
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
@@ -69,7 +70,7 @@ def tick(
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=2) from exc
-    console.print(f"[dim]acting as {identity}[/]")
+    console.print(f"[dim]acting as {escape(identity)}[/]")
 
     owner = env["GITHUB_OWNER"]
     board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
@@ -221,7 +222,7 @@ def doctor(
     }
     for r in results:
         mark, style = marks[r.status]
-        table.add_row(r.check, mark, Text(r.detail, style=style or "") if style else r.detail)
+        table.add_row(r.check, mark, Text(r.detail, style=style or ""))
     console.print(table)
 
     for r in results:
@@ -245,7 +246,7 @@ def doctor(
 def auth() -> None:
     """Verify the credential the agents use — including what it must NOT do."""
     from crew_org.auth import Status as AuthStatus
-    from crew_org.auth import resolve_credentials, verify
+    from crew_org.auth import app_permissions, resolve_credentials, verify
     from crew_org.config import load_env
 
     env = load_env()
@@ -254,7 +255,7 @@ def auth() -> None:
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=2) from exc
-    console.print(f"[dim]identity: {identity}[/]")
+    console.print(f"[dim]identity: {escape(identity)}[/]")
 
     owner = env.get("GITHUB_OWNER")
     if not owner:
@@ -268,6 +269,8 @@ def auth() -> None:
         repos=repos,
         project_number=int(env.get("GITHUB_PROJECT_NUMBER", 0)),
         owner_is_org=env.get("GITHUB_OWNER_TYPE", "organization") == "organization",
+        app_slug=identity if identity != "personal access token" else None,
+        app_permissions=app_permissions(),
     )
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
@@ -281,12 +284,12 @@ def auth() -> None:
         AuthStatus.SKIP: "[dim]skip[/]",
     }
     for c in checks:
-        table.add_row(c.check, marks[c.status], c.detail)
+        table.add_row(c.check, marks[c.status], escape(c.detail))
     console.print(table)
 
     for c in checks:
         if c.hint:
-            console.print(f"[yellow]→[/] [bold]{c.check}:[/] {c.hint}")
+            console.print(f"[yellow]→[/] [bold]{c.check}:[/] {escape(c.hint)}")
 
     if any(c.status is AuthStatus.FAIL for c in checks):
         console.print("\n[red]Token is not fit for the crew.[/]")

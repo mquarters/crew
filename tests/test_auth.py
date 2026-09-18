@@ -24,10 +24,6 @@ def response(status: int, payload: dict | None = None) -> httpx.Response:
 # --- token type ----------------------------------------------------------
 
 
-def test_fine_grained_token_passes():
-    assert check_token_type(FINE).status is Status.PASS
-
-
 def test_classic_token_warns_about_blast_radius():
     result = check_token_type(CLASSIC)
     assert result.status is Status.WARN
@@ -135,3 +131,86 @@ def test_org_owner_does_not_trigger_the_owner_match_warning(monkeypatch):
     checks = auth.verify(FINE, owner="mqucifer", repos=[], project_number=1, owner_is_org=True)
     assert not any(c.check == "owner match" for c in checks)
     assert any(c.check == "org membership" for c in checks)
+
+
+# --- GitHub App credentials ---------------------------------------------
+
+INSTALLATION = "ghs_" + "z" * 36
+
+GOOD_APP_PERMISSIONS = {
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "organization_projects": "write",
+    "metadata": "read",
+}
+
+
+def test_an_installation_token_is_the_best_case_not_a_warning():
+    result = auth.check_token_type(INSTALLATION, app_slug="crew[bot]")
+    assert result.status is Status.PASS
+    assert "crew[bot]" in result.detail
+
+
+def test_a_fine_grained_token_now_warns_about_attribution():
+    """It works, but the crew's work is attributed to the human who made it."""
+    result = auth.check_token_type(FINE)
+    assert result.status is Status.WARN
+    assert "attributed to you" in (result.hint or "")
+
+
+def test_a_complete_grant_set_passes():
+    checks = auth.check_app_permissions(GOOD_APP_PERMISSIONS)
+    assert all(c.status is Status.PASS for c in checks)
+
+
+def test_a_missing_permission_names_which_one():
+    permissions = dict(GOOD_APP_PERMISSIONS)
+    del permissions["organization_projects"]
+    failure = auth.check_app_permissions(permissions)[0]
+    assert failure.status is Status.FAIL
+    assert "organization_projects:write" in failure.detail
+
+
+def test_read_only_contents_is_insufficient():
+    permissions = dict(GOOD_APP_PERMISSIONS, contents="read")
+    failure = auth.check_app_permissions(permissions)[0]
+    assert failure.status is Status.FAIL
+    assert "contents:write" in failure.detail
+
+
+def test_the_hint_says_the_installation_must_accept_the_change():
+    """GitHub does not apply changed app permissions silently."""
+    failure = auth.check_app_permissions({})[0]
+    assert "accept the updated permissions" in (failure.hint or "")
+
+
+@pytest.mark.parametrize("forbidden", ["administration", "organization_administration"])
+def test_an_app_holding_administration_fails(forbidden):
+    permissions = dict(GOOD_APP_PERMISSIONS, **{forbidden: "write"})
+    admin_check = auth.check_app_permissions(permissions)[1]
+    assert admin_check.status is Status.FAIL
+    assert "branch protection" in (admin_check.hint or "")
+
+
+def test_an_app_without_administration_passes_the_negative_check():
+    admin_check = auth.check_app_permissions(GOOD_APP_PERMISSIONS)[1]
+    assert admin_check.status is Status.PASS
+
+
+def test_installation_scope_lists_the_repositories_it_reaches(monkeypatch):
+    monkeypatch.setattr(
+        auth,
+        "_get",
+        lambda *a, **k: response(200, {"repositories": [{"name": "crew"}, {"name": "pilot"}]}),
+    )
+    result = auth.check_installation_scope(INSTALLATION, "crew[bot]")
+    assert result.status is Status.PASS
+    assert "crew, pilot" in result.detail
+
+
+def test_an_uninstalled_app_fails_the_identity_check(monkeypatch):
+    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(404))
+    result = auth.check_installation_scope(INSTALLATION, "crew[bot]")
+    assert result.status is Status.FAIL
+    assert "still installed" in (result.hint or "")

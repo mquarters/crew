@@ -69,6 +69,12 @@ class AppTokenProvider:
         self._client = client or httpx.Client(timeout=30.0)
         self._token: str | None = None
         self._expires_at: float = 0.0
+        # The mint response states exactly what this installation granted —
+        # a more honest source than probing each repository, because an
+        # installation token does not report per-repo push rights the way a
+        # personal access token does.
+        self.permissions: dict[str, str] = {}
+        self.repositories: str = "unknown"
 
     def _app_jwt(self) -> str:
         now = int(time.time())
@@ -129,6 +135,8 @@ class AppTokenProvider:
                 f"{r.json().get('message', r.text[:100])}"
             )
         body = r.json()
+        self.permissions = body.get("permissions") or {}
+        self.repositories = body.get("repository_selection", "unknown")
         self._token = body["token"]
         # expires_at is ISO8601; an hour from now is the documented lifetime.
         self._expires_at = time.time() + 3600

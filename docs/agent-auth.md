@@ -110,7 +110,7 @@ rather than holding a long-lived credential.
 
 | Setting | Value |
 |---|---|
-| Name | `crew` (the bot becomes `crew[bot]`) |
+| Name | must be unique across GitHub — ours is `mqucifer-crew`, so the bot is `mqucifer-crew[bot]` |
 | Homepage URL | the crew repo URL |
 | Webhook | **uncheck Active** — the crew polls; it has no endpoint to receive hooks |
 | Where can it be installed | Only on this account |
@@ -143,7 +143,7 @@ Not Administration.
 
 ```
 GITHUB_APP_ID=123456
-GITHUB_APP_PRIVATE_KEY=.secrets/crew-app.pem
+GITHUB_APP_PRIVATE_KEY=.secrets/<downloaded>.private-key.pem
 GITHUB_APP_INSTALLATION_ID=        # discovered automatically if blank
 ```
 
@@ -158,7 +158,7 @@ Git *commit* authorship comes from git config, not from the token, so agent
 commits must set the author explicitly to be attributed to the bot:
 
 ```
-crew[bot] <APP_ID+crew[bot]@users.noreply.github.com>
+mqucifer-crew[bot] <APP_ID+mqucifer-crew[bot]@users.noreply.github.com>
 ```
 
 Pushes, issues, comments and reviews carry the bot identity automatically.
@@ -168,3 +168,24 @@ Pushes, issues, comments and reviews carry the bot identity automatically.
 Fine-grained tokens expire. When one does, every agent action fails with 401 at
 once — which looks like a total crew outage. `crew auth` distinguishes the two:
 a rejected token reports `token rejected (401)` rather than a permission error.
+
+### Verifying it
+
+```
+crew auth
+  identity: mqucifer-crew[bot]
+  token type     pass   GitHub App installation token (mqucifer-crew[bot]) — expires hourly
+  identity       pass   acting as mqucifer-crew[bot], scoped to crew, sprint-metrics
+  permissions    pass   contents:write, issues:write, metadata:read,
+                        organization_projects:write, pull_requests:write
+  not an admin   pass   no administration permission
+```
+
+An App is checked differently from a token. Its capability is its **grant set**,
+stated once by the token-mint response, rather than something to infer
+repository by repository — an installation token does not report per-repo push
+rights the way a personal access token does, so probing each repo reports a
+read-only App as broken.
+
+Note the App ID is discoverable rather than something to hunt for:
+`gh api orgs/<org>/installations` lists `app_id` and `installation_id`.

@@ -30,7 +30,10 @@ TIMEOUT = 20.0
 # classic token, and only an org-owned board can be driven by a fine-grained
 # one. check_project_access says so when it fails.
 FINE_GRAINED_PREFIX = "github_pat_"
-CLASSIC_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_")
+# A GitHub App installation token. The best case: it acts as crew[bot] rather
+# than as a human, is scoped to the installation, and expires in an hour.
+INSTALLATION_PREFIX = "ghs_"
+CLASSIC_PREFIXES = ("ghp_", "gho_", "ghu_", "ghr_")
 
 
 class Status(StrEnum):
@@ -63,6 +66,15 @@ def load_token(env_path: Path | None = None) -> str | None:
     return None
 
 
+# Populated by resolve_credentials when a GitHub App is in use, so callers can
+# report the grant set without re-minting a token.
+_LAST_APP_PERMISSIONS: dict[str, str] = {}
+
+
+def app_permissions() -> dict[str, str]:
+    return dict(_LAST_APP_PERMISSIONS)
+
+
 def resolve_credentials(env: dict[str, str] | None = None) -> tuple[str, str]:
     """The token the crew should act with, and a description of that identity.
 
@@ -78,7 +90,10 @@ def resolve_credentials(env: dict[str, str] | None = None) -> tuple[str, str]:
     creds = AppCredentials.from_env(env)
     if creds is not None:
         provider = AppTokenProvider(creds)
-        return provider.token(), provider.identity()
+        token = provider.token()
+        _LAST_APP_PERMISSIONS.clear()
+        _LAST_APP_PERMISSIONS.update(provider.permissions)
+        return token, provider.identity()
 
     token = load_token()
     if not token:
@@ -101,10 +116,21 @@ def _get(token: str, path: str) -> httpx.Response:
     )
 
 
-def check_token_type(token: str) -> AuthCheck:
+def check_token_type(token: str, *, app_slug: str | None = None) -> AuthCheck:
+    if token.startswith(INSTALLATION_PREFIX):
+        who = f" ({app_slug})" if app_slug else ""
+        return AuthCheck(
+            check="token type",
+            status=Status.PASS,
+            detail=f"GitHub App installation token{who} — expires hourly",
+        )
     if token.startswith(FINE_GRAINED_PREFIX):
         return AuthCheck(
-            check="token type", status=Status.PASS, detail="fine-grained (per-repo grants)"
+            check="token type",
+            status=Status.WARN,
+            detail="fine-grained token — acts as the human who created it",
+            hint="The crew's work will be attributed to you, and you will not be able to "
+            "approve its pull requests. Configure a GitHub App — see docs/agent-auth.md.",
         )
     if token.startswith(CLASSIC_PREFIXES):
         return AuthCheck(
@@ -140,6 +166,80 @@ def check_identity(token: str) -> tuple[AuthCheck, str | None]:
         )
     login = r.json().get("login")
     return AuthCheck(check="identity", status=Status.PASS, detail=f"acting as {login!r}"), login
+
+
+def check_installation_scope(token: str, app_slug: str | None) -> AuthCheck:
+    """An App's identity is its installation, and what that installation reaches."""
+    r = _get(token, "/installation/repositories?per_page=100")
+    if r.status_code != 200:
+        return AuthCheck(
+            check="identity",
+            status=Status.FAIL,
+            detail=f"installation not readable (HTTP {r.status_code})",
+            hint="Is the app still installed on the organization?",
+        )
+    repos = [item["name"] for item in r.json().get("repositories", [])]
+    who = app_slug or "the app"
+    return AuthCheck(
+        check="identity",
+        status=Status.PASS,
+        detail=f"acting as {who}, scoped to {', '.join(sorted(repos)) or 'nothing'}",
+    )
+
+
+# What the crew needs, and at what level.
+REQUIRED_APP_PERMISSIONS = {
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "organization_projects": "write",
+    "metadata": "read",
+}
+# What it must never hold. This is the permission that would let an agent
+# disable branch protection.
+FORBIDDEN_APP_PERMISSIONS = ("administration", "organization_administration")
+
+
+def check_app_permissions(permissions: dict[str, str]) -> list[AuthCheck]:
+    """Validate an installation's grant set, positively and negatively."""
+    checks: list[AuthCheck] = []
+
+    missing = [
+        f"{name}:{level}"
+        for name, level in REQUIRED_APP_PERMISSIONS.items()
+        if permissions.get(name) != level
+    ]
+    if missing:
+        checks.append(
+            AuthCheck(
+                check="permissions",
+                status=Status.FAIL,
+                detail=f"missing or insufficient: {', '.join(missing)}",
+                hint="Adjust them on the app's settings page, then accept the updated "
+                "permissions on the installation — GitHub does not apply them silently.",
+            )
+        )
+    else:
+        checks.append(
+            AuthCheck(
+                check="permissions",
+                status=Status.PASS,
+                detail=", ".join(f"{k}:{v}" for k, v in sorted(permissions.items())),
+            )
+        )
+
+    held = [name for name in FORBIDDEN_APP_PERMISSIONS if name in permissions]
+    checks.append(
+        AuthCheck(
+            check="not an admin",
+            status=Status.FAIL if held else Status.PASS,
+            detail=f"holds {', '.join(held)}" if held else "no administration permission",
+            hint="Remove it. An agent holding this could disable branch protection."
+            if held
+            else None,
+        )
+    )
+    return checks
 
 
 def check_repo_access(token: str, owner: str, repo: str) -> AuthCheck:
@@ -293,12 +393,29 @@ def verify(
     repos: list[str],
     project_number: int,
     owner_is_org: bool = True,
+    app_slug: str | None = None,
+    app_permissions: dict[str, str] | None = None,
 ) -> list[AuthCheck]:
     """Run the full check set, positive and negative."""
-    checks = [check_token_type(token)]
-    identity, login = check_identity(token)
+    is_app = token.startswith(INSTALLATION_PREFIX)
+    checks = [check_token_type(token, app_slug=app_slug)]
+
+    if is_app:
+        identity = check_installation_scope(token, app_slug)
+        login = None
+    else:
+        identity, login = check_identity(token)
     checks.append(identity)
     if identity.status is Status.FAIL:
+        return checks
+
+    # An App's capability is its grant set, stated once, rather than something
+    # to be inferred repo by repo.
+    if is_app:
+        checks.extend(check_app_permissions(app_permissions or {}))
+        for repo in repos:
+            checks.append(check_issue_write(token, owner, repo))
+        checks.append(check_project_access(token, owner, project_number))
         return checks
 
     if login:
