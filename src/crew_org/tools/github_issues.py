@@ -70,6 +70,17 @@ class IssueClient:
         response.raise_for_status()
         return response.json()
 
+    def add_sub_issue(self, repo: str, parent_number: int, child_id: int) -> None:
+        """Nest one issue under another so the board shows the hierarchy.
+
+        Takes the child's database id, not its number.
+        """
+        self._request(
+            "POST",
+            f"/repos/{self.owner}/{repo}/issues/{parent_number}/sub_issues",
+            sub_issue_id=child_id,
+        )
+
     def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
         self._request("POST", f"/repos/{self.owner}/{repo}/issues/{number}/labels", labels=labels)
 

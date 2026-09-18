@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from crew_org.crews.refinement_crew import EpicProposal, propose_epics
+from crew_org.crews.refinement_crew import Epic, EpicProposal, propose_epics
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
@@ -28,6 +28,9 @@ from crew_org.tools.github_project import Card, ProjectClient
 EPIC_PROPOSAL_MARKER = "<!-- crew:epic-proposal -->"
 
 INBOX = "Inbox (Goals)"
+GOAL_TYPE = "Goal"
+EPIC_TYPE = "Epic"
+NEEDS_HUMAN = "needs:human"
 
 
 @dataclass
@@ -36,6 +39,7 @@ class TickResult:
 
     considered: int = 0
     proposed: list[int] = field(default_factory=list)
+    epics_created: list[int] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
 
@@ -44,7 +48,27 @@ class TickResult:
         return not self.proposed
 
 
-def render_proposal(goal_title: str, proposal: EpicProposal) -> str:
+def render_epic_body(epic: Epic, goal_number: int, goal_title: str) -> str:
+    """An epic issue, written for the Sponsor deciding whether to approve it."""
+    return "\n".join(
+        [
+            f"**Outcome** — {epic.outcome}",
+            "",
+            f"**Why** — {epic.rationale}",
+            "",
+            "---",
+            "",
+            f"Proposed by the Product Owner from #{goal_number} *({goal_title})*.",
+            "",
+            "**Awaiting Sponsor approval.** Approve by moving this card out of "
+            "`Inbox (Goals)` into `Needs Refinement`. Close it to reject.",
+        ]
+    )
+
+
+def render_proposal(
+    goal_title: str, proposal: EpicProposal, epic_numbers: dict[str, int] | None = None
+) -> str:
     """Format a proposal for a human reader who was not present.
 
     The Sponsor reads this on the card and either approves the epics or does
@@ -61,8 +85,10 @@ def render_proposal(goal_title: str, proposal: EpicProposal) -> str:
         "",
     ]
     for i, epic in enumerate(proposal.epics, 1):
+        created = (epic_numbers or {}).get(epic.title)
+        heading = f"### {i}. {epic.title}" + (f" — #{created}" if created else "")
         lines += [
-            f"### {i}. {epic.title}",
+            heading,
             "",
             f"**Outcome** — {epic.outcome}",
             "",
@@ -76,16 +102,80 @@ def render_proposal(goal_title: str, proposal: EpicProposal) -> str:
         "",
         "---",
         "",
-        "*Nothing has been moved on the board.* Approve these by moving this card out "
-        "of `Inbox (Goals)`, or comment with the changes you want and the crew will "
-        "re-propose on the next tick.",
+        "Each epic is now a card in `Inbox (Goals)` labelled `needs:human`, nested "
+        "under this goal. **Nothing has been moved into the sprint.** Approve an epic "
+        "by moving its card to `Needs Refinement`; close it to reject.",
     ]
     return "\n".join(lines)
 
 
 def goal_cards(cards: list[Card]) -> list[Card]:
-    """Cards awaiting an epic proposal."""
-    return [c for c in cards if c.status == INBOX and c.state != "CLOSED"]
+    """Cards awaiting an epic proposal.
+
+    Filtered by Work Type, not just by column: the epics the crew creates land
+    in the same column awaiting approval, and must never be mistaken for goals
+    and decomposed again.
+    """
+    return [
+        c for c in cards if c.status == INBOX and c.state != "CLOSED" and c.work_type == GOAL_TYPE
+    ]
+
+
+def create_epic_cards(
+    board: ProjectClient,
+    issues: IssueClient,
+    sink: EventSink,
+    *,
+    repo: str,
+    goal: Card,
+    proposal: EpicProposal,
+) -> dict[str, int]:
+    """Turn proposed epics into cards awaiting the Sponsor.
+
+    They land in Inbox (Goals) with needs:human, nested under the goal. That is
+    the human gate the constitution describes: the Sponsor approves an epic by
+    moving its card, which is the only way work leaves that column.
+    """
+    created: dict[str, int] = {}
+    for epic in proposal.epics:
+        issue = issues.create(
+            repo,
+            epic.title,
+            render_epic_body(epic, goal.number or 0, goal.title),
+            labels=[NEEDS_HUMAN],
+        )
+        number = issue["number"]
+        created[epic.title] = number
+
+        item = board.add_issue(issue["node_id"])
+        board.set_status(item, INBOX)
+        board.set_select(item, "Work Type", EPIC_TYPE)
+        if goal.priority:
+            board.set_select(item, "Priority", goal.priority)
+
+        # Nesting is best effort: a board that shows the hierarchy is better,
+        # but a missing link must not cost us the epic.
+        try:
+            issues.add_sub_issue(repo, goal.number or 0, issue["id"])
+        except Exception as exc:  # noqa: BLE001
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.NOTE,
+                    card=number,
+                    summary=f"could not nest under #{goal.number}: {exc}"[:100],
+                )
+            )
+
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.CARD_MOVED,
+                role="Product Owner",
+                card=number,
+                summary=f"epic card created — {epic.title[:50]}",
+                **{"to": INBOX},
+            )
+        )
+    return created
 
 
 def tick(
@@ -95,7 +185,10 @@ def tick(
     *,
     default_repo: str,
 ) -> TickResult:
-    """Run one reconciliation pass. Proposes; moves nothing."""
+    """Run one reconciliation pass.
+
+    Creates epic cards awaiting approval; never moves work into the sprint.
+    """
     result = TickResult()
     sink.note(EventKind.TICK_STARTED, "reading board", tick=1)
 
@@ -106,6 +199,13 @@ def tick(
             counts[card.status] = counts.get(card.status, 0) + 1
     sink.note(EventKind.NOTE, f"{len(cards)} cards on the board", counts=counts)
 
+    untyped = [c.number for c in cards if c.status == INBOX and not c.work_type]
+    if untyped:
+        sink.note(
+            EventKind.NOTE,
+            f"ignoring untyped cards in {INBOX}: {untyped} — set Work Type",
+        )
+
     for card in goal_cards(cards):
         result.considered += 1
         repo = card.repo or default_repo
@@ -115,11 +215,7 @@ def tick(
         if issues.has_comment_marked(repo, number, EPIC_PROPOSAL_MARKER):
             result.skipped.append((number, "already proposed"))
             sink.emit(
-                CrewEvent(
-                    kind=EventKind.NOTE,
-                    card=number,
-                    summary="already proposed — skipping",
-                )
+                CrewEvent(kind=EventKind.NOTE, card=number, summary="already proposed — skipping")
             )
             continue
 
@@ -153,21 +249,29 @@ def tick(
             )
             continue
 
-        issues.comment(repo, number, render_proposal(card.title, proposal))
+        epic_numbers = create_epic_cards(
+            board, issues, sink, repo=repo, goal=card, proposal=proposal
+        )
+        result.epics_created.extend(epic_numbers.values())
+
+        # The comment is written last, because it is also the idempotency
+        # marker: if card creation fails halfway, the next tick retries rather
+        # than recording work that did not happen.
+        issues.comment(repo, number, render_proposal(card.title, proposal, epic_numbers))
         result.proposed.append(number)
         sink.emit(
             CrewEvent(
                 kind=EventKind.AGENT_FINISHED,
                 role="Product Owner",
                 card=number,
-                summary=f"proposed {len(proposal.epics)} epics",
+                summary=f"{len(epic_numbers)} epic cards awaiting approval",
             )
         )
 
     sink.note(
         EventKind.TICK_FINISHED,
-        f"{len(result.proposed)} proposed, {len(result.skipped)} skipped, "
-        f"{len(result.failed)} failed",
+        f"{len(result.proposed)} goals decomposed, {len(result.epics_created)} epics created, "
+        f"{len(result.skipped)} skipped, {len(result.failed)} failed",
     )
     return result
 

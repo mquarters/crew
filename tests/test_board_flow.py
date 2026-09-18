@@ -24,13 +24,20 @@ PROPOSAL = EpicProposal(
 )
 
 
-def card(number: int, status: str = INBOX, state: str = "OPEN") -> Card:
+def card(
+    number: int,
+    status: str = INBOX,
+    state: str = "OPEN",
+    work_type: str | None = "Goal",
+) -> Card:
     return Card(
         item_id=f"I{number}",
         number=number,
         title=f"Goal {number}",
         status=status,
         state=state,
+        work_type=work_type,
+        priority="P0",
         repo="sprint-metrics",
     )
 
@@ -39,7 +46,26 @@ class FakeIssues:
     def __init__(self, existing: dict[int, str] | None = None) -> None:
         self.owner = "mqucifer"
         self.posted: list[tuple[int, str]] = []
+        self.created: list[dict] = []
+        self.nested: list[tuple[int, int]] = []
         self._existing = existing or {}
+        self._next = 100
+
+    def create(self, repo: str, title: str, body: str, labels=None) -> dict:
+        self._next += 1
+        issue = {
+            "number": self._next,
+            "id": self._next * 1000,
+            "node_id": f"N{self._next}",
+            "title": title,
+            "body": body,
+            "labels": labels or [],
+        }
+        self.created.append(issue)
+        return issue
+
+    def add_sub_issue(self, repo: str, parent_number: int, child_id: int) -> None:
+        self.nested.append((parent_number, child_id))
 
     def has_comment_marked(self, repo: str, number: int, marker: str) -> bool:
         return marker in self._existing.get(number, "")
@@ -56,12 +82,27 @@ class FakeBoard:
     def __init__(self, cards: list[Card]) -> None:
         self._cards = cards
         self.moves: list[tuple[str, str]] = []
+        self.added: list[str] = []
+        self.selects: list[tuple[str, str, str]] = []
 
     def cards(self) -> list[Card]:
         return self._cards
 
-    def set_status(self, item_id: str, column: str) -> None:  # pragma: no cover
+    def add_issue(self, node_id: str) -> str:
+        self.added.append(node_id)
+        return f"ITEM_{node_id}"
+
+    def set_status(self, item_id: str, column: str) -> None:
         self.moves.append((item_id, column))
+
+    def set_select(self, item_id: str, field: str, option: str) -> None:
+        self.selects.append((item_id, field, option))
+
+    @property
+    def existing_card_moves(self) -> list[tuple[str, str]]:
+        """Moves applied to cards that were already on the board."""
+        existing = {c.item_id for c in self._cards}
+        return [m for m in self.moves if m[0] in existing]
 
 
 def run(board, issues, monkeypatch, proposer=lambda goal: PROPOSAL):
@@ -104,10 +145,53 @@ def test_a_second_tick_does_not_propose_again(monkeypatch):
     assert issues.posted == []
 
 
-def test_phase_one_never_moves_a_card(monkeypatch):
+def test_existing_cards_are_never_moved(monkeypatch):
+    """The crew creates epic cards, but must not move work already on the board —
+    the goal stays at its human gate until the Sponsor releases it."""
     board = FakeBoard([card(1)])
     run(board, FakeIssues(), monkeypatch)
-    assert board.moves == []
+    assert board.existing_card_moves == []
+
+
+def test_epics_become_cards_awaiting_the_sponsor(monkeypatch):
+    board, issues = FakeBoard([card(1)]), FakeIssues()
+    result, _ = run(board, issues, monkeypatch)
+
+    assert len(issues.created) == 2
+    assert result.epics_created == [101, 102]
+    # Every epic is labelled for the Sponsor and parked at the gate.
+    for issue in issues.created:
+        assert issue["labels"] == ["needs:human"]
+    assert [m[1] for m in board.moves] == [INBOX, INBOX]
+    assert ("ITEM_N101", "Work Type", "Epic") in board.selects
+
+
+def test_epics_inherit_the_goals_priority(monkeypatch):
+    board = FakeBoard([card(1)])
+    run(board, FakeIssues(), monkeypatch)
+    assert ("ITEM_N101", "Priority", "P0") in board.selects
+
+
+def test_epics_are_nested_under_their_goal(monkeypatch):
+    issues = FakeIssues()
+    run(FakeBoard([card(1)]), issues, monkeypatch)
+    assert issues.nested == [(1, 101000), (1, 102000)]
+
+
+def test_a_failure_to_nest_does_not_cost_the_epic(monkeypatch):
+    """A board that shows hierarchy is better; a missing link is not worth losing
+    the card over."""
+    issues = FakeIssues()
+    issues.add_sub_issue = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no sub-issues"))
+    result, _ = run(FakeBoard([card(1)]), issues, monkeypatch)
+    assert len(result.epics_created) == 2
+
+
+def test_epic_cards_are_not_mistaken_for_goals(monkeypatch):
+    """Epics await approval in the same column. Decomposing them again would
+    recurse the board into nonsense."""
+    cards = [card(1), card(2, work_type="Epic"), card(3, work_type=None)]
+    assert [c.number for c in goal_cards(cards)] == [1]
 
 
 def test_one_failing_goal_does_not_abandon_the_others(monkeypatch):
