@@ -121,7 +121,13 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
             "content is written verbatim, so partial files destroy the original.\n"
             "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
             "Do not change lint or tool configuration: a stricter rule you add is a "
-            "rule you then have to satisfy, and that is not what the story asked for."
+            "rule you then have to satisfy, and that is not what the story asked for.\n"
+            "Where a file already exists, keep every public function and class it has, "
+            "with the same names and signatures, and add alongside them. Other stories "
+            "depend on that code — rewriting a module you were asked to extend deletes "
+            "work that is already merged and tested.\n"
+            "Implement only this story. Metrics belonging to other stories are not "
+            "yours to add, even when they look adjacent."
             f"{repair}"
         ),
         expected_output="A summary and the complete contents of every file to write.",

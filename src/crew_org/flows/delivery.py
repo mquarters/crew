@@ -28,7 +28,7 @@ from crew_org.escalation import (
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.process import ProcessRules
-from crew_org.tools import claude_code, workspace
+from crew_org.tools import claude_code, regression, workspace
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
@@ -269,6 +269,43 @@ def deliver_story(
                 feedback = f"Your output did not validate:\n{exc}"
                 continue
             outcome.blocked_reason = decision.reason
+            return outcome
+
+        # Checked before applying: a rewrite that deletes existing public names
+        # would otherwise be written to disk and only surface as other stories'
+        # tests failing to import, which reads as a coding error rather than as
+        # the regression it is.
+        regressions = regression.find_regressions(worktree, implementation.files)
+        if regressions:
+            failure = LocalFailure(
+                card=number,
+                role="Developer",
+                failure_class=FailureClass.VERIFY,
+                attempts=outcome.attempts,
+                detail=regression.describe(regressions)[:400],
+            )
+            decision = policy.decide(failure, spent=ledger.spent(sprint))
+            outcome.attempts += 1
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.ESCALATION_DECIDED,
+                    role="Developer",
+                    card=number,
+                    summary=f"REGRESSION — {decision.disposition}",
+                    detail={
+                        "failure_class": "REGRESSION",
+                        "attempt": outcome.attempts,
+                        "removed": {k: sorted(v) for k, v in regressions.items()},
+                    },
+                )
+            )
+            if decision.disposition is Disposition.RETRY_LOCAL:
+                feedback = regression.describe(regressions)
+                continue
+            outcome.blocked_reason = (
+                "the implementation kept deleting existing public names: "
+                + ", ".join(sorted(n for names in regressions.values() for n in names))
+            )
             return outcome
 
         workspace.apply(worktree, implementation.files)

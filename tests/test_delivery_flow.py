@@ -449,3 +449,53 @@ def test_context_is_recomputed_on_every_attempt(harness):
     # The first pass has nothing written yet; the repair is shown what exists.
     assert "Current source and tests" not in calls["context"][0]
     assert "Current source and tests" in calls["context"][1]
+
+
+# --- the regression guard in the loop -----------------------------------
+
+
+DESTRUCTIVE = Implementation(
+    summary="Rewrites the module",
+    files=[
+        FileWrite(path="src/m.py", content="def only_the_new_thing():\n    return 1\n"),
+        FileWrite(path="tests/test_m.py", content="def test_x():\n    assert True\n"),
+    ],
+)
+
+
+def test_an_implementation_that_deletes_existing_names_is_rejected(harness, monkeypatch, tmp_path):
+    """Caught before it is written to disk. Otherwise it surfaces later as other
+    stories' tests failing to import, which reads as a coding error rather than
+    as the regression it is."""
+
+    def seeded_open(self, branch):
+        path = tmp_path / branch.replace("/", "__")
+        (path / "src").mkdir(parents=True, exist_ok=True)
+        (path / "src/m.py").write_text("def already_merged():\n    return 0\n")
+        return path
+
+    monkeypatch.setattr(FakeWorkspace, "open", seeded_open, raising=False)
+    # The retry must preserve what already exists, or it is equally destructive.
+    preserving = Implementation(
+        summary="Adds throughput alongside what is there",
+        files=[
+            FileWrite(
+                path="src/m.py",
+                content=(
+                    "def already_merged():\n    return 0\n\n\ndef throughput():\n    return 1\n"
+                ),
+            ),
+            FileWrite(path="tests/test_m.py", content="def test_x():\n    assert True\n"),
+        ],
+    )
+
+    def implement(n):
+        return DESTRUCTIVE if n == 1 else preserving
+
+    result, _, _, _, calls, seen = harness(checks=[green()], implement=implement)
+    # The destructive attempt never reached the sandbox; the retry did.
+    assert calls["implement"] == 2
+    assert result.delivered
+    decided = [e for e in seen if e.kind == EventKind.ESCALATION_DECIDED]
+    assert decided[0].detail["failure_class"] == "REGRESSION"
+    assert "already_merged" in decided[0].detail["removed"]["src/m.py"]
