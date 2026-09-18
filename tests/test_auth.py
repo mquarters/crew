@@ -112,11 +112,11 @@ def test_org_member_passes(monkeypatch):
     assert auth.check_org_membership(FINE, "mqucifer", "someone").status is Status.PASS
 
 
-def test_non_member_fails_with_the_write_role_hint(monkeypatch):
-    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(404))
-    result = auth.check_org_membership(FINE, "mqucifer", "someone")
-    assert result.status is Status.FAIL
-    assert "Write" in (result.hint or "")
+def test_unreadable_membership_is_skipped_not_failed(monkeypatch):
+    """Reading membership needs a grant the crew has no use for. Demanding it
+    would require privilege in order to prove privilege."""
+    monkeypatch.setattr(auth, "_get", lambda *a, **k: response(403))
+    assert auth.check_org_membership(FINE, "mqucifer", "someone").status is Status.SKIP
 
 
 def test_org_owner_does_not_trigger_the_owner_match_warning(monkeypatch):

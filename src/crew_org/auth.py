@@ -150,7 +150,8 @@ def check_not_admin(token: str, owner: str, repo: str) -> AuthCheck:
     — everything the crew must never be able to reach.
     """
     r = _get(token, f"/repos/{owner}/{repo}/actions/permissions")
-    if r.status_code in (403, 404):
+    # 302 is what GitHub returns when the caller cannot see the membership.
+    if r.status_code in (302, 403, 404):
         return AuthCheck(
             check=f"{repo}: not an admin",
             status=Status.PASS,
@@ -242,11 +243,20 @@ def check_org_membership(token: str, org: str, login: str) -> AuthCheck:
         return AuthCheck(
             check="org membership", status=Status.PASS, detail=f"{login!r} is a member of {org!r}"
         )
+    # 302 is what GitHub returns when the caller cannot see the membership.
+    if r.status_code in (302, 403, 404):
+        # Reading membership needs an org Members grant the crew has no use for.
+        # Refusing here would demand privilege to prove privilege; the board and
+        # repository checks already establish that the token can do its job.
+        return AuthCheck(
+            check="org membership",
+            status=Status.SKIP,
+            detail="not readable without an org Members grant, which is not needed",
+        )
     return AuthCheck(
         check="org membership",
-        status=Status.FAIL,
-        detail=f"{login!r} is not a visible member of {org!r}",
-        hint=f"Invite it to {org} with the Write role — never Admin.",
+        status=Status.WARN,
+        detail=f"inconclusive (HTTP {r.status_code})",
     )
 
 

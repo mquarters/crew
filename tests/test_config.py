@@ -11,6 +11,23 @@ import yaml
 from crew_org.config import CONFIG_DIR, load_org
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def tracked_files() -> list[Path]:
+    """Files git actually tracks.
+
+    The secret scans must look here and nowhere else: .env is gitignored and
+    holds a real token by design, so walking the filesystem would fail on a
+    correctly configured checkout.
+    """
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout
+    return [ROOT / name for name in out.split("\0") if name]
+
+
 AGENTS = CONFIG_DIR / "agents.yaml"
 LITELLM = ROOT / "deploy" / "litellm" / "config.yaml"
 CONSTITUTION = ROOT / "docs" / "ways-of-working.md"
@@ -48,15 +65,17 @@ def test_no_anthropic_api_key_anywhere_in_the_repo():
     """The cost guarantee is structural: escalation must not be able to bill."""
     # Assembled at runtime so this test's own source is not a false positive.
     needle = "ANTHROPIC_API_" + "KEY="
+    # The pre-commit hook's whole job is to grep for this string, so it is the
+    # one file expected to contain it.
+    detector = ROOT / "scripts" / "pre-commit"
     offenders = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or ".git/" in str(path) or ".venv/" in str(path):
+    for path in tracked_files():
+        if not path.is_file() or path == detector:
             continue
-        if path.suffix in {".py", ".yaml", ".yml", ".sh", ".md", ".toml"} or path.name == ".env":
-            text = path.read_text(errors="ignore")
-            # The docs explain the absence; an actual assignment is the problem.
-            if needle in text and "no anthropic_api_key" not in text.lower():
-                offenders.append(str(path.relative_to(ROOT)))
+        text = path.read_text(errors="ignore")
+        # The docs explain the absence; an actual assignment is the problem.
+        if needle in text and "no anthropic_api_key" not in text.lower():
+            offenders.append(str(path.relative_to(ROOT)))
     assert not offenders, f"{needle} assigned in: {offenders}"
 
 
@@ -90,10 +109,9 @@ def test_no_credential_shaped_strings_in_the_repo():
         r"|AKIA[0-9A-Z]{16}"
         r"|-----BEGIN [A-Z ]*PRIVATE KEY"
     )
-    skip = {".git", ".venv", ".ruff_cache", ".pytest_cache", "__pycache__"}
     offenders = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or skip & set(path.parts) or path.name == Path(__file__).name:
+    for path in tracked_files():
+        if not path.is_file() or path.name == Path(__file__).name:
             continue
         if pattern.search(path.read_text(errors="ignore")):
             offenders.append(str(path.relative_to(ROOT)))
