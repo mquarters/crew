@@ -218,3 +218,35 @@ def test_moving_to_a_column_that_does_not_exist_fails_before_the_call():
     c = client_for(FIELDS_RESPONSE)
     with pytest.raises(BoardError, match="no option"):
         c.set_status("ITEM_7", "Shipped")
+
+
+# --- WIP counts ----------------------------------------------------------
+
+
+def typed(number: int, status: str, work_type: str) -> dict:
+    node = item(number, status)
+    node["fieldValues"]["nodes"].append({"name": work_type, "field": {"name": "Work Type"}})
+    return node
+
+
+def test_containers_do_not_consume_wip():
+    """A Goal or Epic sitting in a column tracks its children; counting it would
+    let a decomposition exhaust a WIP limit with no work started."""
+    c = client_for(
+        items_response(
+            [
+                typed(1, "Ready", "Goal"),
+                typed(2, "Ready", "Epic"),
+                typed(3, "Ready", "Story"),
+                typed(4, "Ready", "Bug"),
+            ]
+        )
+    )
+    assert c.counts() == {"Ready": 2}
+
+
+def test_counts_can_be_computed_from_cards_already_read():
+    """Saves a second round trip during a tick."""
+    c = client_for(items_response([typed(1, "Ready", "Story")]))
+    cards = c.cards()
+    assert c.counts(cards) == {"Ready": 1}

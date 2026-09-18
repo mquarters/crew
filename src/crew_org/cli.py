@@ -86,11 +86,22 @@ def tick(
         )
     for number in result.proposed:
         console.print(f"[green]proposed[/] epics on #{number}")
+    for number in result.epics_refined:
+        console.print(f"[green]refined[/]  #{number} into stories")
+    if result.design_required:
+        console.print(
+            f"[yellow]design required[/] on {', '.join(f'#{n}' for n in result.design_required)}"
+        )
     for number, why in result.skipped:
         console.print(f"[dim]skipped[/]  #{number} — {why}")
     for number, why in result.failed:
         console.print(f"[red]failed[/]   #{number} — {why}")
-    if result.proposed:
+    if result.stories_created:
+        console.print(
+            f"\n[bold]{len(result.stories_created)} stories are in Ready.[/] "
+            "Review them, or start a sprint when the backlog looks right."
+        )
+    elif result.proposed:
         console.print(
             "\n[bold]Read the proposals on the cards.[/] Nothing was moved — approve by "
             "moving a card out of Inbox (Goals), or comment with changes."

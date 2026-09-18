@@ -163,13 +163,20 @@ def propose_epics(goal: str) -> EpicProposal:
     return crew.kickoff().pydantic
 
 
-def split_epic(epic: Epic) -> StoryProposal:
-    """Business Analyst only: an epic becomes INVEST-sized stories."""
+def split_epic(title: str, context: str = "") -> StoryProposal:
+    """Business Analyst only: an epic becomes INVEST-sized stories.
+
+    Takes the epic's title and whatever context the card carries, rather than an
+    Epic model. By the time an epic is being split the Sponsor has approved it,
+    so the proposal-time validators — which argue for why a slice deserves to
+    exist — no longer apply and reconstructing one just to satisfy them would be
+    inventing data.
+    """
     agents = build_agents("business_analyst")
     task = Task(
         description=(
             f"Split this epic into stories.\n\n"
-            f"Epic: {epic.title}\nOutcome: {epic.outcome}\nRationale: {epic.rationale}\n\n"
+            f"Epic: {title}\n\n{context}\n\n"
             "Each story must satisfy INVEST and carry acceptance criteria a test can be "
             "written from directly. Split by workflow step, by business rule, or by "
             "happy-path-then-edge-cases — never by layer."

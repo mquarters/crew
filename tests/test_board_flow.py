@@ -63,6 +63,7 @@ class FakeIssues:
         self.created: list[dict] = []
         self.nested: list[tuple[int, int]] = []
         self.removed_labels: list[tuple[int, str]] = []
+        self.added_labels: list[tuple[int, str]] = []
         self._existing = existing or {}
         self._next = 100
 
@@ -85,6 +86,9 @@ class FakeIssues:
     def remove_label(self, repo: str, number: int, label: str) -> None:
         self.removed_labels.append((number, label))
 
+    def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
+        self.added_labels.extend((number, label) for label in labels)
+
     def has_comment_marked(self, repo: str, number: int, marker: str) -> bool:
         return marker in self._existing.get(number, "")
 
@@ -105,6 +109,16 @@ class FakeBoard:
 
     def cards(self) -> list[Card]:
         return self._cards
+
+    def counts(self, cards=None) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for c in cards if cards is not None else self._cards:
+            if c.status and c.work_type not in {"Goal", "Epic"}:
+                out[c.status] = out.get(c.status, 0) + 1
+        return out
+
+    def set_number(self, item_id: str, field: str, value: float) -> None:
+        self.selects.append((item_id, field, str(value)))
 
     def add_issue(self, node_id: str) -> str:
         self.added.append(node_id)
@@ -267,3 +281,126 @@ def test_the_proposal_says_the_goal_is_not_the_card_to_move(monkeypatch):
     body = render_proposal("Goal: x", PROPOSAL, {"Report as a table": 3})
     assert "not a card to move" in body
     assert "individually" in body
+
+
+# --- the Business Analyst pass -------------------------------------------
+
+from crew_org.crews.refinement_crew import AcceptanceCriterion, Story, StoryProposal  # noqa: E402
+from crew_org.flows.board_flow import (  # noqa: E402
+    READY,
+    REFINEMENT,
+    STORY_SPLIT_MARKER,
+    approved_epics,
+)
+
+
+def make_story(title: str, points: int = 3) -> Story:
+    return Story(
+        title=title,
+        as_a="Sponsor",
+        i_want="a metric",
+        so_that="I can judge the crew",
+        acceptance_criteria=[
+            AcceptanceCriterion(given="data exists", when="I run it", then="I see a table"),
+            AcceptanceCriterion(given="no data", when="I run it", then="it says so"),
+        ],
+        points=points,
+    )
+
+
+SPLIT = StoryProposal(
+    epic_title="Report as a table",
+    stories=[make_story("Cycle time", 3), make_story("Throughput", 2)],
+)
+
+
+def epic_card(number: int, status: str = REFINEMENT) -> Card:
+    return Card(
+        item_id=f"I{number}",
+        number=number,
+        title=f"Epic {number}",
+        status=status,
+        state="OPEN",
+        work_type="Epic",
+        priority="P1",
+        repo="sprint-metrics",
+    )
+
+
+def run_split(board, issues, monkeypatch, proposal=SPLIT):
+    monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", lambda g: PROPOSAL)
+    monkeypatch.setattr("crew_org.flows.board_flow.split_epic", lambda title, context="": proposal)
+    sink = EventSink(None)
+    return tick(board, issues, sink, default_repo="sprint-metrics")
+
+
+def test_only_approved_epics_are_split():
+    """An epic still at the gate has not been approved."""
+    cards = [epic_card(3), epic_card(5, status=INBOX), card(1)]
+    assert [c.number for c in approved_epics(cards)] == [3]
+
+
+def test_an_approved_epic_becomes_story_cards(monkeypatch):
+    board, issues = FakeBoard([epic_card(3)]), FakeIssues()
+    result = run_split(board, issues, monkeypatch)
+    assert len(result.stories_created) == 2
+    assert result.epics_refined == [3]
+    assert ("ITEM_N101", "Work Type", "Story") in board.selects
+
+
+def test_stories_carry_points_and_inherited_priority(monkeypatch):
+    board, issues = FakeBoard([epic_card(3)]), FakeIssues()
+    run_split(board, issues, monkeypatch)
+    assert ("ITEM_N101", "Points", "3") in board.selects
+    assert ("ITEM_N101", "Priority", "P1") in board.selects
+    assert [m[1] for m in board.moves] == [READY, READY]
+
+
+def test_a_second_tick_does_not_split_again(monkeypatch):
+    issues = FakeIssues({3: STORY_SPLIT_MARKER})
+    result = run_split(FakeBoard([epic_card(3)]), issues, monkeypatch)
+    assert result.stories_created == []
+    assert (3, "already split") in result.skipped
+
+
+def test_a_full_ready_column_holds_stories_in_refinement(monkeypatch):
+    """Ready is a queue but still has a limit; a story that cannot enter waits
+    rather than being dropped."""
+    existing = [
+        Card(
+            item_id=f"R{i}",
+            number=100 + i,
+            title="s",
+            status=READY,
+            state="OPEN",
+            work_type="Story",
+        )
+        for i in range(10)
+    ]
+    board, issues = FakeBoard([epic_card(3), *existing]), FakeIssues()
+    result = run_split(board, issues, monkeypatch)
+    assert len(result.stories_created) == 2
+    assert [m[1] for m in board.moves] == [REFINEMENT, REFINEMENT]
+
+
+def test_design_is_required_when_the_split_trips_the_threshold(monkeypatch):
+    big = StoryProposal(epic_title="Big", stories=[make_story(f"S{i}", 5) for i in range(4)])
+    issues = FakeIssues()
+    result = run_split(FakeBoard([epic_card(3)]), issues, monkeypatch, proposal=big)
+    assert result.design_required == [3]
+    assert (3, "needs:design") in issues.added_labels
+
+
+def test_a_small_split_does_not_require_design(monkeypatch):
+    issues = FakeIssues()
+    result = run_split(FakeBoard([epic_card(3)]), issues, monkeypatch)
+    assert result.design_required == []
+    assert issues.added_labels == []
+
+
+def test_an_approved_epic_stops_asking_for_a_decision(monkeypatch):
+    """Moving the card out of the gate was the approval. Keeping needs:human
+    leaves the board asking for a decision already made."""
+    issues = FakeIssues()
+    run_split(FakeBoard([epic_card(3)]), issues, monkeypatch)
+    assert (3, "needs:human") in issues.removed_labels

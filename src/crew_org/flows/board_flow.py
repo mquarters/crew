@@ -15,10 +15,21 @@ would add ceremony that obscures what is happening. It arrives with Phase 2.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 
-from crew_org.crews.refinement_crew import Epic, EpicProposal, propose_epics
+from crew_org.config import load_org
+from crew_org.crews.refinement_crew import (
+    Epic,
+    EpicProposal,
+    Story,
+    StoryProposal,
+    propose_epics,
+    split_epic,
+)
+from crew_org.design import DesignPolicy, EpicShape
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.process import ProcessRules
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
@@ -27,10 +38,16 @@ from crew_org.tools.github_project import Card, ProjectClient
 # accrue one identical proposal per tick.
 EPIC_PROPOSAL_MARKER = "<!-- crew:epic-proposal -->"
 
+STORY_SPLIT_MARKER = "<!-- crew:story-split -->"
+
 INBOX = "Inbox (Goals)"
+REFINEMENT = "Needs Refinement"
+READY = "Ready"
 GOAL_TYPE = "Goal"
 EPIC_TYPE = "Epic"
+STORY_TYPE = "Story"
 NEEDS_HUMAN = "needs:human"
+NEEDS_DESIGN = "needs:design"
 
 
 @dataclass
@@ -40,6 +57,9 @@ class TickResult:
     considered: int = 0
     proposed: list[int] = field(default_factory=list)
     epics_created: list[int] = field(default_factory=list)
+    epics_refined: list[int] = field(default_factory=list)
+    stories_created: list[int] = field(default_factory=list)
+    design_required: list[int] = field(default_factory=list)
     skipped: list[tuple[int, str]] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
 
@@ -187,26 +207,203 @@ def create_epic_cards(
     return created
 
 
+def approved_epics(cards: list[Card]) -> list[Card]:
+    """Epics the Sponsor has released from the gate, awaiting story splitting."""
+    return [
+        c
+        for c in cards
+        if c.status == REFINEMENT and c.state != "CLOSED" and c.work_type == EPIC_TYPE
+    ]
+
+
+def render_story_body(story: Story, epic_number: int, epic_title: str) -> str:
+    """A story issue, written so a test can be derived from it directly."""
+    lines = [
+        f"As a **{story.as_a}**, I want **{story.i_want}**, so that **{story.so_that}**.",
+        "",
+        "## Acceptance criteria",
+        "",
+    ]
+    for i, ac in enumerate(story.acceptance_criteria, 1):
+        lines += [
+            f"{i}. **Given** {ac.given}",
+            f"   **When** {ac.when}",
+            f"   **Then** {ac.then}",
+            "",
+        ]
+    lines += [
+        f"**Estimate** — {story.points} points",
+        "",
+        "---",
+        "",
+        f"Split from #{epic_number} *({epic_title})* by the Business Analyst.",
+    ]
+    return "\n".join(lines)
+
+
+def render_split(
+    epic_title: str, proposal: StoryProposal, decision, numbers: dict[str, int]
+) -> str:
+    """The record of a split, for whoever reads the epic later."""
+    total = sum(s.points for s in proposal.stories)
+    lines = [
+        STORY_SPLIT_MARKER,
+        "## Stories",
+        "",
+        f"**Business Analyst** split *{epic_title}* into {len(proposal.stories)} stories "
+        f"totalling {total} points.",
+        "",
+    ]
+    for story in proposal.stories:
+        number = numbers.get(story.title)
+        ref = f" — #{number}" if number else ""
+        lines.append(f"- **[{story.points}]** {story.title}{ref}")
+    lines += [
+        "",
+        "### Design",
+        "",
+        ("**Required.** " if decision.required else "**Not required.** ") + decision.reason,
+        "",
+    ]
+    if decision.required:
+        lines.append(
+            "Labelled `needs:design`. The Architect writes a design note before "
+            "implementation begins."
+        )
+    return "\n".join(lines)
+
+
+def refine_epics(
+    board: ProjectClient,
+    issues: IssueClient,
+    sink: EventSink,
+    rules: ProcessRules,
+    design: DesignPolicy,
+    result: TickResult,
+    *,
+    cards: list[Card],
+    default_repo: str,
+) -> None:
+    """Split approved epics into stories, and decide whether design is warranted."""
+    counts = board.counts(cards)
+
+    for epic_card in approved_epics(cards):
+        repo = epic_card.repo or default_repo
+        number = epic_card.number
+        assert number is not None
+
+        if issues.has_comment_marked(repo, number, STORY_SPLIT_MARKER):
+            result.skipped.append((number, "already split"))
+            continue
+
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.AGENT_STARTED,
+                role="Business Analyst",
+                card=number,
+                summary=f"split {epic_card.title[:50]}",
+            )
+        )
+        try:
+            proposal = split_epic(epic_card.title, _goal_body(issues, repo, number)[:800])
+        except Exception as exc:  # noqa: BLE001
+            result.failed.append((number, f"{type(exc).__name__}: {exc}"))
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.AGENT_FAILED,
+                    role="Business Analyst",
+                    card=number,
+                    summary=str(exc)[:100],
+                )
+            )
+            continue
+
+        numbers: dict[str, int] = {}
+        for story in proposal.stories:
+            issue = issues.create(
+                repo, story.title, render_story_body(story, number, epic_card.title)
+            )
+            numbers[story.title] = issue["number"]
+
+            item = board.add_issue(issue["node_id"])
+            board.set_select(item, "Work Type", STORY_TYPE)
+            board.set_number(item, "Points", story.points)
+            if epic_card.priority:
+                board.set_select(item, "Priority", epic_card.priority)
+
+            # Ready is a queue, but it still has a limit. A story that cannot
+            # enter waits in refinement rather than being dropped.
+            verdict = rules.may_move(frm=REFINEMENT, to=READY, counts=counts)
+            column = READY if verdict.allowed else REFINEMENT
+            board.set_status(item, column)
+            counts[column] = counts.get(column, 0) + 1
+            if not verdict.allowed:
+                sink.emit(
+                    CrewEvent(
+                        kind=EventKind.NOTE,
+                        card=issue["number"],
+                        summary=f"held in {REFINEMENT}: {verdict.reason}"[:100],
+                    )
+                )
+
+            # Nesting is best effort; a missing link is not worth losing the story.
+            with contextlib.suppress(Exception):
+                issues.add_sub_issue(repo, number, issue["id"])
+            result.stories_created.append(issue["number"])
+
+        decision = design.decide(
+            EpicShape(
+                points_total=sum(s.points for s in proposal.stories),
+                story_count=len(proposal.stories),
+                labels=frozenset(epic_card.labels),
+            )
+        )
+        if decision.required:
+            issues.add_labels(repo, number, [NEEDS_DESIGN])
+            result.design_required.append(number)
+
+        issues.comment(repo, number, render_split(epic_card.title, proposal, decision, numbers))
+
+        # Moving the card out of the gate *was* the approval. Leaving the label
+        # on means the board keeps asking for a decision already made — the same
+        # staleness the goal card had.
+        issues.remove_label(repo, number, NEEDS_HUMAN)
+
+        result.epics_refined.append(number)
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.AGENT_FINISHED,
+                role="Business Analyst",
+                card=number,
+                summary=f"{len(numbers)} stories"
+                + (" — design required" if decision.required else ""),
+            )
+        )
+
+
 def tick(
     board: ProjectClient,
     issues: IssueClient,
     sink: EventSink,
     *,
     default_repo: str,
+    org: dict | None = None,
 ) -> TickResult:
-    """Run one reconciliation pass.
+    """Run one reconciliation pass, to quiescence.
 
-    Creates epic cards awaiting approval; never moves work into the sprint.
+    Two passes, in dependency order: goals become epics awaiting the Sponsor,
+    and epics the Sponsor has approved become stories. Neither moves work into
+    a sprint — that is still the Sponsor's decision.
     """
+    org = org or load_org()
+    rules = ProcessRules.from_config(org)
+    design = DesignPolicy.from_config(org)
+
     result = TickResult()
     sink.note(EventKind.TICK_STARTED, "reading board", tick=1)
 
     cards = board.cards()
-    counts: dict[str, int] = {}
-    for card in cards:
-        if card.status:
-            counts[card.status] = counts.get(card.status, 0) + 1
-    sink.note(EventKind.NOTE, f"{len(cards)} cards on the board", counts=counts)
+    sink.note(EventKind.NOTE, f"{len(cards)} cards on the board", counts=board.counts(cards))
 
     untyped = [c.number for c in cards if c.status == INBOX and not c.work_type]
     if untyped:
@@ -283,10 +480,15 @@ def tick(
             )
         )
 
+    # Epics approved in an earlier tick are refined now. Epics created moments
+    # ago are not: they are sitting at the Sponsor's gate, unapproved.
+    refine_epics(board, issues, sink, rules, design, result, cards=cards, default_repo=default_repo)
+
     sink.note(
         EventKind.TICK_FINISHED,
         f"{len(result.proposed)} goals decomposed, {len(result.epics_created)} epics created, "
-        f"{len(result.skipped)} skipped, {len(result.failed)} failed",
+        f"{len(result.epics_refined)} epics refined, {len(result.stories_created)} stories, "
+        f"{len(result.failed)} failed",
     )
     return result
 

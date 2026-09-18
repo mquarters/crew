@@ -19,6 +19,10 @@ TIMEOUT = 30.0
 PAGE_SIZE = 50
 
 
+# Work types that track other work rather than being worked themselves.
+CONTAINER_TYPES = frozenset({"Goal", "Epic"})
+
+
 class BoardError(RuntimeError):
     """A GraphQL call failed."""
 
@@ -275,11 +279,16 @@ class ProjectClient:
                 return cards
             cursor = page["endCursor"]
 
-    def counts(self) -> dict[str, int]:
-        """Occupancy per status column — what WIP enforcement needs."""
+    def counts(self, cards: list[Card] | None = None) -> dict[str, int]:
+        """Occupancy per status column, counting flowing work only.
+
+        Goals and Epics are containers: they sit in a column tracking their
+        children rather than consuming capacity. Counting them would let a
+        decomposition exhaust a WIP limit without anyone doing any work.
+        """
         counts: dict[str, int] = {}
-        for card in self.cards():
-            if card.status:
+        for card in cards if cards is not None else self.cards():
+            if card.status and card.work_type not in CONTAINER_TYPES:
                 counts[card.status] = counts.get(card.status, 0) + 1
         return counts
 
