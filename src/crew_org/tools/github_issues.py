@@ -124,6 +124,17 @@ class IssueClient:
             body=body,
         )
 
+    def merge_pull(self, repo: str, number: int, *, method: str = "squash") -> dict[str, Any]:
+        return self._request(
+            "PUT", f"/repos/{self.owner}/{repo}/pulls/{number}/merge", merge_method=method
+        )
+
+    def pull_for_branch(self, repo: str, branch: str) -> dict[str, Any] | None:
+        for pull in self.open_pulls(repo):
+            if pull["head"]["ref"] == branch:
+                return pull
+        return None
+
     def sub_issues(self, repo: str, number: int) -> list[dict[str, Any]]:
         response = self._client.get(
             f"{API}/repos/{self.owner}/{repo}/issues/{number}/sub_issues?per_page=100"

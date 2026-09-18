@@ -30,6 +30,9 @@ crew tick                      # goals become epics; approved epics become stori
 crew sprint start              # fill the sprint from approved epics
 crew deliver                   # implement a story and show the diff
 crew deliver --land            # ...and actually open the pull request
+crew review                    # review every open pull request
+crew qa                        # verify delivered work against its criteria
+crew sprint close              # merge what you approved, and report
 ```
 
 A tick runs to quiescence. The human controls when the process runs, not the
@@ -46,7 +49,10 @@ Everything else is the crew's. The Sponsor:
 1. **Approves epics** — each proposed epic is a card in `Inbox (Goals)` labelled
    `needs:human`. Move it to `Needs Refinement` to approve, close it to reject.
    Approving an epic *is* the sprint scope decision; nothing asks again.
-2. **Reviews the increment** at sprint close.
+2. **Reviews the increment** at sprint close — which is also where pull
+   requests get approved. The crew cannot approve its own work, so reviewing
+   the increment *is* approving the pull requests that make it up: one pass at
+   the end, rather than a decision per story.
 
 Stories, estimates, sprint contents, implementation, review and merge are not
 Sponsor decisions. A manager reading eight stories to understand a sprint has

@@ -218,6 +218,23 @@ class Workspace:
         self.path, self.branch = path, branch
         return path
 
+    def open_existing(self, branch: str) -> Path:
+        """Check out a branch that already exists on the remote, to inspect it."""
+        self._ensure_clone()
+        _run(["worktree", "prune"], cwd=self.clone)
+
+        path = (WORKTREES / f"review__{branch.replace('/', '__')}").resolve()
+        if path.exists():
+            self.close(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _run(
+            ["worktree", "add", "--detach", str(path), f"origin/{branch}"],
+            cwd=self.clone,
+            token=self.token,
+        )
+        self.path, self.branch = path, branch
+        return path
+
     def commit(self, message: str) -> bool:
         """Commit everything in the worktree. False if there was nothing to commit."""
         if self.path is None:

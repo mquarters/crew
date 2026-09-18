@@ -312,6 +312,54 @@ def auth() -> None:
 
 
 @app.command()
+def qa() -> None:
+    """Verify delivered work against its acceptance criteria."""
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env, load_org
+    from crew_org.flows.acceptance import close_finished_parents, run_qa
+    from crew_org.git_ops import Workspace
+    from crew_org.llm import health
+    from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
+    from crew_org.tools.sandbox import Sandbox
+
+    org, env = load_org(), load_env()
+    ok, message = health()
+    if not ok:
+        console.print(f"[red]{message}[/]")
+        raise typer.Exit(code=1)
+
+    box = Sandbox.from_config(org)
+    blocked = box.unavailable_reason()
+    if blocked:
+        console.print(f"[red]Sandbox unavailable.[/] {blocked}")
+        raise typer.Exit(code=1)
+
+    token, identity = resolve_credentials(env)
+    owner, repo = env["GITHUB_OWNER"], env.get("PILOT_REPO", "crew")
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    issues = IssueClient(token, owner)
+    ws = Workspace(owner, repo, token, _bot_identity(token, identity))
+
+    sink = EventSink(VAR / "events" / "qa.jsonl")
+    cards = board.cards()
+    result = run_qa(board, issues, sink, ws, box, cards=cards, repo=repo)
+    result.parents_closed = close_finished_parents(board, issues, sink, board.cards(), repo=repo)
+
+    console.print()
+    for outcome in result.verified:
+        console.print(f"[green]#{outcome.card}[/] accepted")
+    for outcome in result.returned:
+        console.print(f"[yellow]#{outcome.card}[/] returned — {outcome.unproven} criteria unproven")
+    for number, why in result.failed:
+        console.print(f"[red]#{number}[/] {why}")
+    for number in result.parents_closed:
+        console.print(f"[green]#{number}[/] closed — all children done")
+    if not (result.verified or result.returned or result.failed):
+        console.print("[dim]Nothing In Review.[/]")
+
+
+@app.command()
 def review(
     repo: str = typer.Option(None, "--repo", help="Defaults to the pilot repo."),
 ) -> None:
@@ -365,7 +413,7 @@ def deliver(
     diff is shown rather than landed. Pass --land when you want it to push.
     """
     from crew_org.auth import resolve_credentials
-    from crew_org.config import load_env, load_org
+    from crew_org.config import load_env
     from crew_org.escalation import EscalationLedger, EscalationPolicy
     from crew_org.flows.delivery import deliver as run_delivery
     from crew_org.git_ops import Workspace
@@ -556,10 +604,69 @@ def _render_plan(plan, *, dry_run: bool) -> None:
 
 
 @sprint_app.command("close")
-def sprint_close() -> None:
-    """Close a sprint: review summary, standup, and retro from the ledger."""
-    console.print("[yellow]Not yet implemented.[/] Requires the board (Phase 2).")
-    raise typer.Exit(code=1)
+def sprint_close(
+    sprint: str = typer.Option(None, "--sprint", help="Iteration name."),
+    no_merge: bool = typer.Option(False, "--no-merge", help="Report without merging."),
+) -> None:
+    """Close the sprint: merge what you approved, and report on the increment.
+
+    This is the second gate. The crew cannot approve its own pull requests, so
+    reviewing the increment is approving the pull requests that make it up.
+    """
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env
+    from crew_org.escalation import EscalationLedger
+    from crew_org.flows.close import close_sprint
+    from crew_org.llm import health
+    from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
+
+    env = load_env()
+    ok, message = health()
+    if not ok:
+        console.print(f"[red]{message}[/]")
+        raise typer.Exit(code=1)
+
+    token, _ = resolve_credentials(env)
+    owner, repo = env["GITHUB_OWNER"], env.get("PILOT_REPO", "crew")
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    sprint = sprint or board.schema.field("Sprint").current_iteration()
+
+    result = close_sprint(
+        board,
+        IssueClient(token, owner),
+        EventSink(VAR / "events" / "close.jsonl"),
+        EscalationLedger(VAR / "ledger" / "escalations.jsonl"),
+        sprint=sprint,
+        repo=repo,
+        merge=not no_merge,
+    )
+
+    console.print(f"\n[bold]{result.sprint}[/]")
+    for number in result.merged:
+        console.print(f"  [green]#{number}[/] merged and done")
+    for story, pull in result.awaiting_approval:
+        console.print(
+            f"  [yellow]#{story}[/] waiting on your approval of PR #{pull} — "
+            f"https://github.com/{owner}/{repo}/pull/{pull}"
+        )
+    for number, why in result.unmergeable:
+        console.print(f"  [red]#{number}[/] {why}")
+    if result.still_open:
+        console.print(
+            f"  [dim]{len(result.still_open)} stories did not reach QA: "
+            + ", ".join(f"#{n}" for n in result.still_open)
+            + "[/]"
+        )
+
+    if result.retro:
+        console.print(f"\n[bold]Retro[/]\n{result.retro.summary}")
+        for defect in result.retro.defects:
+            console.print(f"\n[yellow]{defect.subject}[/] — {defect.problem}")
+            console.print(f"  → {defect.change}")
+
+    if result.complete:
+        console.print("\n[green]Sprint complete.[/]")
 
 
 if __name__ == "__main__":

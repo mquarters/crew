@@ -113,7 +113,9 @@ qa_engineer:
     the criterion and the observed behaviour. You do not fix the code, and you
     do not comment on style or structure — that is the Code Reviewer's finding
     to make.
-  llm: crew-local
+  # Reads code and test output at length; same circular-reasoning risk as the
+  # Developer, so reasoning is off. See docs/reference/sglang-serving.md.
+  llm: crew-code
   can: [run_tests, file_bug, verdict_behaviour, comment]
   constitution: [3, 7, 10]      # story format, DoD, audit
 
@@ -132,7 +134,7 @@ code_reviewer:
     it, not merely a test that mentions it. You return work for scope creep: a
     diff doing more than its card is not ready, however good the extra is.
     You never ask "does it work" — that is QA's evidence to produce.
-  llm: crew-local
+  llm: crew-code
   can: [review_diff, verdict_diff, file_bug, comment]
   constitution: [3, 7, 8, 10]   # story format, DoD, conventions, audit
 
