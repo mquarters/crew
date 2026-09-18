@@ -58,3 +58,20 @@ def _validate(org: dict[str, Any]) -> None:
         raise ValueError(
             f"escalation classes cannot be both never_escalate and may_escalate: {sorted(overlap)}"
         )
+
+
+def load_env(path: Path | None = None) -> dict[str, str]:
+    """Read .env into a dict. Values already exported win, as in a shell."""
+    import os
+
+    target = path or Path(".env")
+    values: dict[str, str] = {}
+    if target.exists():
+        for line in target.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip("'\"")
+    values.update({k: v for k, v in os.environ.items() if k in values or k.startswith("GITHUB_")})
+    return values

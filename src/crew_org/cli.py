@@ -197,6 +197,62 @@ def doctor(
     console.print("\n[green]Phase 0 gate passed.[/] Substrate is sound.")
 
 
+@app.command()
+def auth() -> None:
+    """Verify the credential the agents use — including what it must NOT do."""
+    from crew_org.auth import Status as AuthStatus
+    from crew_org.auth import load_token, verify
+    from crew_org.config import load_env
+
+    env = load_env()
+    token = load_token()
+    if not token:
+        console.print(
+            "[red]No GITHUB_TOKEN.[/] Create a fine-grained token and add it to .env — "
+            "see [bold]docs/agent-auth.md[/] for the exact permissions."
+        )
+        raise typer.Exit(code=2)
+
+    owner = env.get("GITHUB_OWNER")
+    if not owner:
+        console.print("[red]GITHUB_OWNER is not set in .env.[/] Run scripts/bootstrap_github.sh.")
+        raise typer.Exit(code=2)
+
+    repos = [r for r in (env.get("CREW_REPO"), env.get("PILOT_REPO")) if r]
+    checks = verify(
+        token,
+        owner=owner,
+        repos=repos,
+        project_number=int(env.get("GITHUB_PROJECT_NUMBER", 0)),
+    )
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    table.add_column("check")
+    table.add_column("")
+    table.add_column("detail", ratio=1)
+    marks = {
+        AuthStatus.PASS: "[green]pass[/]",
+        AuthStatus.FAIL: "[red]FAIL[/]",
+        AuthStatus.WARN: "[yellow]warn[/]",
+        AuthStatus.SKIP: "[dim]skip[/]",
+    }
+    for c in checks:
+        table.add_row(c.check, marks[c.status], c.detail)
+    console.print(table)
+
+    for c in checks:
+        if c.hint:
+            console.print(f"[yellow]→[/] [bold]{c.check}:[/] {c.hint}")
+
+    if any(c.status is AuthStatus.FAIL for c in checks):
+        console.print("\n[red]Token is not fit for the crew.[/]")
+        raise typer.Exit(code=1)
+    if any(c.status is AuthStatus.WARN for c in checks):
+        console.print("\n[yellow]Token usable, with warnings.[/]")
+        return
+    console.print("\n[green]Token is correctly scoped.[/]")
+
+
 @sprint_app.command("start")
 def sprint_start() -> None:
     """Open a sprint and admit cards from Ready."""
