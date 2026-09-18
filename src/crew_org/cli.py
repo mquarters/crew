@@ -43,16 +43,55 @@ def tick(
     sink = _sink(dry_run)
     view = LiveView(org["board"]["columns"], budget=org["sprint"]["escalation_budget"])
 
-    if not dry_run:
-        console.print(
-            "[yellow]Not yet wired to a board.[/] The inference substrate and GitHub "
-            "bootstrap must be in place first. Run [bold]crew tick --dry-run[/] to "
-            "exercise the live view, or [bold]crew doctor[/] to check the backend."
-        )
+    if dry_run:
+        with attach(sink, view):
+            _synthetic_tick(sink)
+        return
+
+    # The proxy is project-scoped and will not always be running. Say so plainly
+    # rather than surfacing a connection error from deep inside an agent.
+    from crew_org.auth import load_token
+    from crew_org.config import load_env
+    from crew_org.flows.board_flow import tick as run_tick
+    from crew_org.llm import health
+    from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
+
+    ok, message = health()
+    if not ok:
+        console.print(f"[red]{message}[/]")
         raise typer.Exit(code=1)
+    console.print(f"[dim]{message}[/]")
+
+    env = load_env()
+    token = load_token()
+    if not token:
+        console.print("[red]No GITHUB_TOKEN.[/] Run [bold]crew auth[/] for what is needed.")
+        raise typer.Exit(code=2)
+
+    owner = env["GITHUB_OWNER"]
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    issues = IssueClient(token, owner)
 
     with attach(sink, view):
-        _synthetic_tick(sink)
+        result = run_tick(board, issues, sink, default_repo=env.get("PILOT_REPO", "crew"))
+
+    console.print()
+    if result.considered == 0:
+        console.print(
+            "[dim]Nothing in Inbox (Goals). File a goal issue and add it to the board.[/]"
+        )
+    for number in result.proposed:
+        console.print(f"[green]proposed[/] epics on #{number}")
+    for number, why in result.skipped:
+        console.print(f"[dim]skipped[/]  #{number} — {why}")
+    for number, why in result.failed:
+        console.print(f"[red]failed[/]   #{number} — {why}")
+    if result.proposed:
+        console.print(
+            "\n[bold]Read the proposals on the cards.[/] Nothing was moved — approve by "
+            "moving a card out of Inbox (Goals), or comment with changes."
+        )
 
 
 def _synthetic_tick(sink: EventSink) -> None:

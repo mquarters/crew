@@ -138,7 +138,9 @@ create_field() {
 
 # "Type" is reserved by Projects v2 (it collides with the built-in issue type),
 # hence "Work Type".
-create_field "Work Type"   SINGLE_SELECT "Epic,Story,Task,Bug,Spike"
+# Goal is in the taxonomy (constitution §2) — it is the only artifact the
+# human authors, so it must exist on the board.
+create_field "Work Type"   SINGLE_SELECT "Goal,Epic,Story,Task,Bug,Spike"
 create_field "Priority"    SINGLE_SELECT "P0,P1,P2,P3"
 create_field "Owner Agent" SINGLE_SELECT "Product Owner,Business Analyst,Architect,Developer,QA Engineer,Code Reviewer,Scrum Master"
 create_field "Points"      NUMBER
