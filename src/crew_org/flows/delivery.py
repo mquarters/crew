@@ -26,6 +26,7 @@ from crew_org.escalation import (
     utcnow,
 )
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.merge import merge_approved
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.process import ProcessRules
 from crew_org.tools import claude_code, regression, workspace
@@ -72,6 +73,8 @@ class DeliveryResult:
     blocked: list[DeliveryOutcome] = field(default_factory=list)
     recovered: list[int] = field(default_factory=list)
     not_ours: list[int] = field(default_factory=list)
+    landed: list[int] = field(default_factory=list)
+    conflicted: list[int] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -493,6 +496,14 @@ def deliver(
     """Pull stories into progress up to the WIP limit, and deliver them."""
     result = DeliveryResult()
     cards = board.cards()
+
+    # Land first, then branch. A story that branches from a main missing its
+    # predecessors is a conflict scheduled for later.
+    landed = merge_approved(board, issues, sink, cards=cards, default_repo=repo, repos=repos)
+    result.landed = [card for card, _pr in landed.merged]
+    result.conflicted = [card for card, _pr in landed.conflicted]
+    if landed.merged or landed.conflicted:
+        cards = board.cards()
 
     # Heal before acting: an interrupted run leaves cards claimed by nobody.
     recovered = reconcile_orphans(board, issues, sink, cards, repo=repo)

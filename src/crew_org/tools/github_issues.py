@@ -129,6 +129,10 @@ class IssueClient:
             "PUT", f"/repos/{self.owner}/{repo}/pulls/{number}/merge", merge_method=method
         )
 
+    def pull(self, repo: str, number: int) -> dict[str, Any]:
+        """One pull request, including mergeability — the list endpoint omits it."""
+        return self._request("GET", f"/repos/{self.owner}/{repo}/pulls/{number}")
+
     def pull_for_branch(self, repo: str, branch: str) -> dict[str, Any] | None:
         for pull in self.open_pulls(repo):
             if pull["head"]["ref"] == branch:

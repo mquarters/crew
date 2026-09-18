@@ -185,7 +185,7 @@ escalates:
 |---|---|---|---|
 | `SCHEMA` | Output did not parse into the task's expected structure | **Never** | Retry locally at most twice with the validation error supplied. Persistent failure files a `defect:prompt` issue against the crew repo. |
 | `SCOPE` | The task is too large or ambiguous to act on | **Never** | Return the card to `Needs Refinement` with the specific ambiguity named. |
-| `VERIFY` | Code was produced; tests or lint failed | After 2 local repair attempts | Escalate with the failing output attached. |
+| `VERIFY` | Code was produced; tests or lint failed | After 2 local repair attempts — a first attempt plus two repairs, which the ledger records as three attempts | Escalate with the failing output attached. |
 | `CAPABILITY` | The agent judges the task beyond its reach | Yes, within budget | Escalate **with written justification** naming what specifically it could not do. |
 
 An escalation without a justification is rejected and treated as `SCOPE`.

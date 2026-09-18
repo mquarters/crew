@@ -470,6 +470,10 @@ def deliver(
         )
 
     console.print()
+    for number in result.landed:
+        console.print(f"[green]#{number}[/] merged and done")
+    for number in result.conflicted:
+        console.print(f"[red]#{number}[/] merge conflict — blocked, needs a person")
     for outcome in result.delivered:
         if outcome.landed:
             console.print(f"[green]#{outcome.card}[/] → PR #{outcome.pr} on `{outcome.branch}`")
