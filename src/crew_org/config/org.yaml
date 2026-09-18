@@ -55,6 +55,18 @@ estimation:
   scale: [1, 2, 3, 5, 8]
   max_story_points: 8           # larger must be split, never admitted
 
+sandbox:
+  # Testing the crew's output means executing code an LLM wrote. That happens in
+  # a container with no network, no capabilities, a non-root user and hard
+  # resource limits.
+  #
+  # 'required' fails when no engine is available rather than falling back to the
+  # host — a silent fallback looks protected while running arbitrary code as the
+  # user. 'off' is an explicit acceptance of that risk, never a default.
+  mode: required
+  engine: docker
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
 execution:
   max_iterations_per_card: 12   # hard cap; exceeded -> Blocked
   max_wallclock_seconds: 900    # per card, per tick

@@ -112,7 +112,9 @@ def harness(tmp_path, monkeypatch):
     """Everything the loop needs, with the model and the shell faked out."""
     calls = {"implement": 0, "escalate": 0, "feedback": []}
 
-    def make(*, checks, implement=None, escalate_result=None, cards=None):
+    def make(
+        *, checks, implement=None, escalate_result=None, cards=None, dry_run=False, limit=None
+    ):
         board = FakeBoard(cards or [story()])
         issues = FakeIssues()
         ws = FakeWorkspace(tmp_path)
@@ -162,6 +164,8 @@ def harness(tmp_path, monkeypatch):
             ws,
             sprint=SPRINT,
             repo="sprint-metrics",
+            dry_run=dry_run,
+            limit=limit,
         )
         return result, board, issues, ws, calls, seen
 
@@ -282,3 +286,54 @@ def test_the_worktree_is_always_closed(harness):
     failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
     _, _, _, ws, _, _ = harness(checks=[red(), red(), red(), red()], escalate_result=failed)
     assert ws.closed == 1
+
+
+# --- dry run -------------------------------------------------------------
+
+
+def test_a_dry_run_verifies_but_lands_nothing(harness, monkeypatch):
+    """Same code path as a real run up to the point of landing, so what it shows
+    is what would land."""
+    monkeypatch.setattr(
+        FakeWorkspace, "diff", lambda self: "--- a/src/m.py\n+++ b/src/m.py\n", raising=False
+    )
+    result, board, issues, ws, _, _ = harness(checks=[green()], dry_run=True)
+    assert len(result.delivered) == 1
+    outcome = result.delivered[0]
+    assert outcome.diff and not outcome.landed
+    assert ws.pushed == 0
+    assert issues.prs == []
+    assert ws.committed == []
+
+
+def test_a_dry_run_leaves_the_board_as_it_found_it(harness, monkeypatch):
+    monkeypatch.setattr(FakeWorkspace, "diff", lambda self: "diff", raising=False)
+    _, board, _, _, _, _ = harness(checks=[green()], dry_run=True)
+    assert [m[1] for m in board.moves] == ["In Progress", "Sprint Backlog"]
+
+
+def test_a_dry_run_still_repairs_and_escalates(harness, monkeypatch):
+    """Dry means 'does not land', not 'does not try'."""
+    monkeypatch.setattr(FakeWorkspace, "diff", lambda self: "diff", raising=False)
+    result, _, _, _, calls, _ = harness(checks=[red(), red(), red(), green()], dry_run=True)
+    assert calls["escalate"] == 1
+    assert result.delivered[0].escalated
+
+
+def test_a_dry_run_failure_does_not_block_the_card(harness, monkeypatch):
+    """Nothing was attempted for real, so nothing should be marked blocked."""
+    failed = EscalationResult(outcome=Outcome.FAILED, detail="still broken")
+    result, board, issues, _, _, _ = harness(
+        checks=[red(), red(), red(), red()], escalate_result=failed, dry_run=True
+    )
+    assert len(result.blocked) == 1
+    assert issues.labels == []
+    assert "Blocked" not in [m[1] for m in board.moves]
+
+
+def test_the_limit_caps_how_many_stories_are_attempted(harness):
+    result, _, _, _, calls, _ = harness(
+        checks=[green(), green()], cards=[story(6), story(7)], limit=1
+    )
+    assert len(result.delivered) == 1
+    assert calls["implement"] == 1

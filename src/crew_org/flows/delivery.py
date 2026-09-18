@@ -51,9 +51,15 @@ class DeliveryOutcome:
     blocked_reason: str | None = None
     attempts: int = 0
     escalated: bool = False
+    diff: str | None = None
 
     @property
     def ok(self) -> bool:
+        return self.pr is not None or self.diff is not None
+
+    @property
+    def landed(self) -> bool:
+        """Did this actually reach a pull request? False for a dry run."""
         return self.pr is not None
 
 
@@ -125,8 +131,14 @@ def deliver_story(
     sprint: str,
     repo: str,
     default_branch: str,
+    dry_run: bool = False,
 ) -> DeliveryOutcome:
-    """Take one story from Sprint Backlog to a pull request."""
+    """Take one story from Sprint Backlog to a pull request.
+
+    A dry run stops once the work is verified: the diff is captured and nothing
+    is committed, pushed or opened. It is the same code path as a real run up to
+    that point, so what it shows is what would land.
+    """
     number = card.number or 0
     outcome = DeliveryOutcome(card=number)
     story_text = f"{card.title}\n\n{issues.get(repo, number).get('body') or ''}"
@@ -235,6 +247,20 @@ def deliver_story(
         outcome.blocked_reason = decision.reason
         return outcome
 
+    if dry_run:
+        # Stop at the point of landing. Everything above this line ran exactly
+        # as it would in a real delivery, so the diff is what would have landed.
+        outcome.diff = ws.diff()
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.AGENT_FINISHED,
+                role="Developer",
+                card=number,
+                summary=f"verified, not landed — {len(implementation.files)} files",
+            )
+        )
+        return outcome
+
     if not ws.commit(
         f"feat({number}): {card.title}\n\n{implementation.summary}\n\nCloses #{number}"
     ):
@@ -292,13 +318,17 @@ def deliver(
     sprint: str,
     repo: str,
     default_branch: str = "main",
+    dry_run: bool = False,
+    limit: int | None = None,
 ) -> DeliveryResult:
     """Pull stories into progress up to the WIP limit, and deliver them."""
     result = DeliveryResult()
     cards = board.cards()
     counts = board.counts(cards)
 
-    for card in sprint_stories(cards, sprint):
+    for index, card in enumerate(sprint_stories(cards, sprint)):
+        if limit is not None and index >= limit:
+            break
         verdict = rules.may_move(frm=SPRINT_BACKLOG, to=IN_PROGRESS, counts=counts)
         if not verdict.allowed:
             sink.note(EventKind.NOTE, verdict.reason)
@@ -328,6 +358,7 @@ def deliver(
                 sprint=sprint,
                 repo=repo,
                 default_branch=default_branch,
+                dry_run=dry_run,
             )
         except Exception as exc:  # noqa: BLE001
             outcome = DeliveryOutcome(
@@ -335,6 +366,13 @@ def deliver(
             )
         finally:
             ws.close()
+
+        if outcome.ok and dry_run:
+            # Put the card back: a dry run must leave the board as it found it.
+            board.set_status(card.item_id, SPRINT_BACKLOG)
+            counts[IN_PROGRESS] -= 1
+            result.delivered.append(outcome)
+            continue
 
         if outcome.ok:
             board.set_status(card.item_id, IN_REVIEW)
@@ -347,6 +385,10 @@ def deliver(
                 f"Lint and tests pass." + (" Escalated to finish." if outcome.escalated else ""),
             )
             result.delivered.append(outcome)
+        elif dry_run:
+            board.set_status(card.item_id, SPRINT_BACKLOG)
+            counts[IN_PROGRESS] -= 1
+            result.blocked.append(outcome)
         else:
             board.set_status(card.item_id, BLOCKED)
             counts[IN_PROGRESS] -= 1

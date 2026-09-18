@@ -260,3 +260,32 @@ are the dial: raise them to buy back escalation budget, lower them if
 developers begin producing conflicting approaches. If neither setting works,
 the correct next move is a human gate before implementation — not a larger
 escalation budget.
+
+---
+
+## 14. Running what the crew writes
+
+Testing an implementation means executing code an LLM wrote. That happens in a
+container, always, and the container is the default rather than a hardening
+step applied later.
+
+| Protection | Why |
+|---|---|
+| No network during lint and tests | Generated code cannot reach anything while it runs. Only dependency resolution is given a network. |
+| Non-root user | The container runs as the invoking user, so nothing inside it is privileged. |
+| Read-only root filesystem | Only the worktree and a `tmpfs` are writable. |
+| All capabilities dropped, `no-new-privileges` | Nothing can escalate. |
+| Memory, CPU and PID limits | A runaway process is killed rather than taking the machine with it. |
+| Only the worktree and a cache are mounted | The host filesystem is not visible. |
+| Every credential stripped from the environment | Code the model wrote never sees the token that can write to the repository. |
+
+**When no container engine is available, the check fails.** It does not fall
+back to the host. A silent fallback is worse than no sandbox at all, because it
+looks protected while running arbitrary code against the user's own account.
+Host execution exists only as `sandbox.mode: off` in `config/org.yaml` — an
+explicit acceptance of the risk, never a default.
+
+These are bounds on blast radius, and bounds are not proof. They were verified
+against a live engine rather than assumed: network blocked for test code but
+available for dependency resolution, a 4GB allocation killed at the 2GB limit,
+`/etc` unwritable, `uid` non-zero, and the host filesystem absent.

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from crew_org.crews.delivery_crew import FileWrite
+from crew_org.tools.sandbox import Mode, Sandbox
 
 # A runaway test must not hang the tick.
 DEFAULT_TIMEOUT = 300
@@ -83,25 +84,42 @@ def apply(worktree: Path, files: list[FileWrite]) -> list[str]:
     return written
 
 
-def run(worktree: Path, command: list[str], *, timeout: int = DEFAULT_TIMEOUT) -> CommandResult:
-    """Run one command in the worktree, with credentials stripped."""
-    env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
+def run(
+    worktree: Path,
+    command: list[str],
+    *,
+    sandbox: Sandbox | None = None,
+    network: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> CommandResult:
+    """Run one command against the worktree.
+
+    With a sandbox in `required` mode the command runs inside a container; the
+    host is never a fallback. Credentials are stripped either way, because the
+    host path exists only as an explicit opt-in and still must not hand a
+    repository token to code the model wrote.
+    """
+    sandbox = sandbox or Sandbox()
     printable = " ".join(command)
+
+    if sandbox.mode is Mode.REQUIRED:
+        blocked = sandbox.unavailable_reason()
+        if blocked:
+            return CommandResult(command=printable, code=126, output=blocked)
+        argv = sandbox.command(worktree, command, network=network)
+        cwd = None
+    else:
+        argv = command
+        cwd = worktree
+
+    env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
     try:
         completed = subprocess.run(
-            command,
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
+            argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
         )
     except subprocess.TimeoutExpired:
         return CommandResult(
-            command=printable,
-            code=-1,
-            output=f"no output within {timeout}s",
-            timed_out=True,
+            command=printable, code=-1, output=f"no output within {timeout}s", timed_out=True
         )
     except FileNotFoundError as exc:
         return CommandResult(command=printable, code=127, output=str(exc))
@@ -114,18 +132,25 @@ def run(worktree: Path, command: list[str], *, timeout: int = DEFAULT_TIMEOUT) -
     return CommandResult(command=printable, code=completed.returncode, output=output)
 
 
-def check(worktree: Path, *, timeout: int = DEFAULT_TIMEOUT) -> CheckResult:
-    """Lint and test the worktree.
+def check(
+    worktree: Path, *, sandbox: Sandbox | None = None, timeout: int = DEFAULT_TIMEOUT
+) -> CheckResult:
+    """Resolve dependencies, lint, and test.
 
-    NOTE: this executes code the model wrote, on this machine. The worktree
-    bounds what it is likely to touch and the timeout bounds how long, but
-    neither is a sandbox. Run the crew in a container before pointing it at
-    anything you would mind losing.
+    Only the dependency step is given a network. Lint and tests run with none at
+    all, so generated code cannot reach anything while it executes.
     """
+    sandbox = sandbox or Sandbox()
     results = [
-        run(worktree, ["uv", "sync", "--extra", "dev", "--quiet"], timeout=timeout),
+        run(
+            worktree,
+            ["uv", "sync", "--extra", "dev", "--quiet"],
+            sandbox=sandbox,
+            network=True,
+            timeout=timeout,
+        )
     ]
     if results[0].ok:
-        results.append(run(worktree, ["uv", "run", "ruff", "check", "."], timeout=timeout))
-        results.append(run(worktree, ["uv", "run", "pytest", "-q"], timeout=timeout))
+        for command in (["uv", "run", "ruff", "check", "."], ["uv", "run", "pytest", "-q"]):
+            results.append(run(worktree, command, sandbox=sandbox, network=False, timeout=timeout))
     return CheckResult(results=results)

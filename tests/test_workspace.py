@@ -7,7 +7,18 @@ import pytest
 
 from crew_org.crews.delivery_crew import FileWrite
 from crew_org.tools import workspace
-from crew_org.tools.workspace import CheckResult, CommandResult, apply, check, run
+from crew_org.tools.sandbox import Mode, Sandbox
+from crew_org.tools.workspace import CheckResult, CommandResult, apply, check
+
+# These exercise the runner itself — argument handling, timeouts, output caps —
+# so they run on the host deliberately. Spinning up a container per assertion
+# would make the suite slow and dependent on a running daemon while testing
+# nothing about the container. The sandbox has its own tests.
+HOST = Sandbox(mode=Mode.OFF)
+
+
+def run(worktree, command, **kwargs):
+    return workspace.run(worktree, command, sandbox=HOST, **kwargs)
 
 
 def test_files_are_written_into_the_worktree(tmp_path):
@@ -63,9 +74,9 @@ def test_a_missing_command_is_reported_not_raised(tmp_path):
     assert run(tmp_path, ["definitely-not-a-command"]).code == 127
 
 
-def test_credentials_are_not_visible_to_generated_code(tmp_path, monkeypatch):
-    """The model's code runs on this machine; it must not be handed the token
-    that can write to the repository."""
+def test_credentials_are_stripped_even_on_the_host_path(tmp_path, monkeypatch):
+    """Host execution is an explicit opt-in, not a safe one — it must still
+    refuse to hand a repository token to code the model wrote."""
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_secret")
     monkeypatch.setenv("HARMLESS", "visible")
     result = run(
@@ -123,11 +134,35 @@ def test_a_failed_sync_stops_before_linting(tmp_path, monkeypatch):
     """Running tests against unresolved dependencies produces noise, not signal."""
     calls: list[list[str]] = []
 
-    def fake_run(worktree, command, *, timeout=0):
+    def fake_run(worktree, command, *, sandbox=None, network=False, timeout=0):
         calls.append(command)
         return CommandResult(command=" ".join(command), code=1, output="lock conflict")
 
     monkeypatch.setattr(workspace, "run", fake_run)
-    result = check(tmp_path)
+    result = check(tmp_path, sandbox=HOST)
     assert len(calls) == 1
     assert not result.ok
+
+
+def test_the_sandbox_is_required_unless_explicitly_turned_off(tmp_path, monkeypatch):
+    """The default path refuses to run when no engine is available, rather than
+    quietly executing generated code on the host."""
+    monkeypatch.setattr("crew_org.tools.sandbox.shutil.which", lambda _: None)
+    result = workspace.run(tmp_path, ["echo", "hi"])
+    assert not result.ok
+    assert result.code == 126
+    assert "not on PATH" in result.output
+
+
+def test_dependency_resolution_is_the_only_networked_step(tmp_path, monkeypatch):
+    """Generated code must not reach anything while it executes."""
+    seen: list[tuple[list[str], bool]] = []
+
+    def fake_run(worktree, command, *, sandbox=None, network=False, timeout=0):
+        seen.append((command, network))
+        return CommandResult(command=" ".join(command), code=0, output="")
+
+    monkeypatch.setattr(workspace, "run", fake_run)
+    check(tmp_path, sandbox=HOST)
+    assert seen[0][1] is True and "sync" in seen[0][0]
+    assert all(networked is False for _cmd, networked in seen[1:])

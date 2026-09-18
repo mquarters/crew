@@ -235,6 +235,17 @@ class Workspace:
         )
         return True
 
+    def diff(self) -> str:
+        """The change as a patch, without committing it.
+
+        Staging is how untracked files become visible to diff; nothing is
+        committed, so a dry run leaves the worktree exactly as it found it.
+        """
+        if self.path is None:
+            raise GitError("no worktree open")
+        _run(["add", "-A"], cwd=self.path)
+        return _run(["diff", "--cached"], cwd=self.path)
+
     def push(self) -> None:
         if self.path is None or self.branch is None:
             raise GitError("no worktree open")
