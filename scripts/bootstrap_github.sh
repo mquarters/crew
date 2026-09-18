@@ -67,34 +67,53 @@ say "Status columns"
 STATUS_FIELD_ID="$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
   --jq '.fields[] | select(.name=="Status") | .id')"
 
-read -r -d '' STATUS_OPTIONS <<'JSON' || true
-[
-  {"name":"Inbox (Goals)",    "color":"GRAY",   "description":"Sponsor goals awaiting epic proposal"},
-  {"name":"Needs Refinement", "color":"ORANGE", "description":"Not yet meeting Definition of Ready"},
-  {"name":"Ready",            "color":"YELLOW", "description":"Meets Definition of Ready"},
-  {"name":"Sprint Backlog",   "color":"BLUE",   "description":"Admitted to the current sprint"},
-  {"name":"In Progress",      "color":"PURPLE", "description":"Being implemented"},
-  {"name":"In Review",        "color":"PINK",   "description":"PR open, awaiting review"},
-  {"name":"QA",               "color":"RED",    "description":"Verifying against acceptance criteria"},
-  {"name":"Done",             "color":"GREEN",  "description":"Merged and green"},
-  {"name":"Blocked",          "color":"GRAY",   "description":"Blocked on an external input"}
-]
-JSON
+# `gh api -f` sends strings; singleSelectOptions needs a real JSON array, so the
+# whole GraphQL body is built as JSON and piped in.
+python3 - "$STATUS_FIELD_ID" <<'PY' | gh api graphql --input - >/dev/null
+import json, sys
 
-gh api graphql -f query='
-  mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-    updateProjectV2Field(input: {fieldId: $field, singleSelectOptions: $options}) {
-      projectV2Field { ... on ProjectV2SingleSelectField { id name } }
-    }
-  }' -f field="$STATUS_FIELD_ID" -f options="$STATUS_OPTIONS" >/dev/null
+OPTIONS = [
+    ("Inbox (Goals)",    "GRAY",   "Sponsor goals awaiting epic proposal"),
+    ("Needs Refinement", "ORANGE", "Not yet meeting Definition of Ready"),
+    ("Ready",            "YELLOW", "Meets Definition of Ready"),
+    ("Sprint Backlog",   "BLUE",   "Admitted to the current sprint"),
+    ("In Progress",      "PURPLE", "Being implemented"),
+    ("In Review",        "PINK",   "PR open, awaiting review"),
+    ("QA",               "RED",    "Verifying against acceptance criteria"),
+    ("Done",             "GREEN",  "Merged and green"),
+    ("Blocked",          "GRAY",   "Blocked on an external input"),
+]
+
+MUTATION = """
+mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {fieldId: $field, singleSelectOptions: $options}) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id name } }
+  }
+}
+"""
+
+print(json.dumps({
+    "query": MUTATION,
+    "variables": {
+        "field": sys.argv[1],
+        "options": [
+            {"name": n, "color": c, "description": d} for n, c, d in OPTIONS
+        ],
+    },
+}))
+PY
 ok "status columns set"
 
 # --- custom fields -------------------------------------------------------
 say "Custom fields"
+field_exists() {
+  gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
+    --jq ".fields[] | select(.name==\"$1\") | .id" 2>/dev/null | grep -q .
+}
+
 create_field() {
   local name="$1" type="$2" opts="${3:-}"
-  if gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json \
-      --jq ".fields[] | select(.name==\"${name}\") | .id" | grep -q .; then
+  if field_exists "$name"; then
     ok "${name} already exists"; return
   fi
   if [[ -n "$opts" ]]; then
@@ -107,11 +126,29 @@ create_field() {
   ok "created ${name}"
 }
 
-create_field "Type"        SINGLE_SELECT "Epic,Story,Task,Bug,Spike"
+# "Type" is reserved by Projects v2 (it collides with the built-in issue type),
+# hence "Work Type".
+create_field "Work Type"   SINGLE_SELECT "Epic,Story,Task,Bug,Spike"
 create_field "Priority"    SINGLE_SELECT "P0,P1,P2,P3"
-create_field "Owner Agent" SINGLE_SELECT "Product Owner,Business Analyst,Architect,Developer,QA Engineer,Code Reviewer,Scrum Master,Tech Writer"
+create_field "Owner Agent" SINGLE_SELECT "Product Owner,Business Analyst,Architect,Developer,QA Engineer,Code Reviewer,Scrum Master"
 create_field "Points"      NUMBER
-create_field "Escalated"   NUMBER
+create_field "Escalations" NUMBER
+
+# An iteration field gives the metrics CLI real sprint date ranges. gh cannot
+# always create one; fall back to text so the bootstrap still completes.
+if ! field_exists "Sprint"; then
+  if gh project field-create "$PROJECT_NUMBER" --owner "$OWNER" \
+       --name "Sprint" --data-type ITERATION >/dev/null 2>&1; then
+    ok "created Sprint (iteration)"
+  else
+    gh project field-create "$PROJECT_NUMBER" --owner "$OWNER" \
+      --name "Sprint" --data-type TEXT >/dev/null
+    warn "Sprint created as TEXT — gh could not create an iteration field."
+    warn "  Convert it in the project UI if you want real sprint date ranges."
+  fi
+else
+  ok "Sprint already exists"
+fi
 
 # --- labels --------------------------------------------------------------
 say "Labels"
@@ -129,6 +166,8 @@ for repo in "$CREW_REPO" "$PILOT_REPO"; do
   add_label "$repo" "blocked"         "000000" "Blocked on an external input"
   add_label "$repo" "defect:prompt"   "FBCA04" "Agent prompt or schema defect"
   add_label "$repo" "defect:process"  "FEF2C0" "Process defect raised by a retro"
+  add_label "$repo" "needs:design"    "C2E0C6" "Force an Architect design note"
+  add_label "$repo" "no:design"       "E4E669" "Waive the Architect design note"
 done
 add_label "$CREW_REPO" "escalation:rate-limited" "C5DEF5" "Parked on a Claude usage limit"
 
