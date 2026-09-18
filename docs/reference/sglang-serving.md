@@ -84,6 +84,41 @@ Two ways to resolve it, neither urgent until the crew actually runs hot:
 The second is safer on a box whose memory settings already sit near a known
 crash boundary.
 
+## Reasoning: off for implementation, on for refinement
+
+This model reasons **circularly on long structured generations**. The reasoning
+compounds rather than converging, exhausts the token budget, and the answer
+never arrives.
+
+Measured on the same story, same schema, same prompt:
+
+| | thinking ON | thinking OFF |
+|---|---|---|
+| Wall clock | 27 minutes | **55 seconds** |
+| Reasoning tokens | thousands | 0 |
+| Valid output | none | a complete implementation |
+
+So the Developer runs on `crew-code` with `enable_thinking: false`. Refinement
+stays on `crew-local` with thinking on: those generations are short enough to
+survive the pathology, and the epics and stories it produces are measurably
+better for it.
+
+This is the single largest performance decision in the system, and it is
+model-specific. Re-measure it before changing the backend rather than carrying
+the setting forward as though it were a general truth.
+
+### Zombie requests
+
+A killed client does **not** stop generation. Observed: the crew process gone,
+and SGLang still generating at 24 tok/s with 13k tokens consumed, five minutes
+later. LiteLLM holds the upstream connection, so the server never learns the
+client left.
+
+Shorter generations make this mostly self-correcting — a 55-second job drains
+before it matters, where a 27-minute one does not. Watch `num_running_reqs`
+against whether any crew process is alive; a request with no client is a
+recognisable and specific failure shape.
+
 ## Reasoning cost
 
 Qwen3.8 thinks before answering — 22 reasoning tokens to answer "reply with the

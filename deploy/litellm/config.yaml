@@ -48,6 +48,29 @@ model_list:
         chat_template_kwargs:
           enable_thinking: false
 
+  # Implementation work. Reasoning is switched OFF deliberately, and this is
+  # the single largest performance decision in the system.
+  #
+  # Measured on the same story, same schema, same prompt:
+  #   thinking ON  — 27 minutes, no valid output, circular reasoning
+  #   thinking OFF — 55 seconds, 2,195 tokens, a valid implementation
+  #
+  # This model reasons circularly on long structured generations: the
+  # reasoning compounds instead of converging, exhausts the token budget, and
+  # the answer never arrives. Refinement is short enough to survive it and
+  # measurably benefits, so crew-local keeps thinking on.
+  - model_name: crew-code
+    litellm_params:
+      model: openai/qwen3.8-27b-sglang
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "sk-not-used"
+      drop_params: true
+      temperature: 0.1
+      timeout: 1800
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
 litellm_settings:
   drop_params: true
   # A timeout must outlast the generation it carries, or the proxy kills work

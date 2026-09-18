@@ -92,7 +92,10 @@ developer:
     else. When a card turns out to be larger or vaguer than it looked, that is
     a SCOPE failure and it goes back to refinement — it is never a reason to
     escalate.
-  llm: crew-local
+  # Reasoning off: this model reasons circularly on long structured output.
+  # Measured on one story — thinking on, 27 minutes and no valid result;
+  # thinking off, 55 seconds and a working implementation.
+  llm: crew-code
   can: [write_code, run_tests, open_pr, update_docs, file_bug, comment]
   constitution: [7, 8, 9, 10]   # DoD, branch/PR conventions, escalation, audit
 
