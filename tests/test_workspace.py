@@ -91,13 +91,32 @@ def test_credentials_are_stripped_even_on_the_host_path(tmp_path, monkeypatch):
     assert "None visible" in result.output
 
 
-def test_enormous_output_is_elided_from_the_middle(tmp_path):
-    """Keep both ends: the command and the final error are the useful parts."""
+def test_command_output_is_kept_whole(tmp_path):
+    """A 3,000-character head and tail was enough to repair from only if the
+    defect sat at one end. Story #9's pytest run had thirteen failures and the
+    model repaired three times from a view with the middle cut out."""
     result = run(
-        tmp_path, ["python3", "-c", f"print('A'*{workspace.MAX_OUTPUT_CHARS}); print('TAIL')"]
+        tmp_path, ["python3", "-c", "print('A'*50_000); print('MIDDLE'); print('B'*50_000)"]
     )
-    assert "elided" in result.output
-    assert result.output.endswith("TAIL")
+
+    assert "MIDDLE" in result.output
+    assert len(result.output) > 100_000
+
+
+def test_a_runaway_report_keeps_the_end(tmp_path):
+    """The guard is against a command that will not stop, not against size. A
+    test run puts its summary and its last failure at the end."""
+    from crew_org.tools.workspace import CheckResult, CommandResult
+
+    huge = "x" * (workspace.MAX_FAILURE_REPORT_CHARS + 10_000)
+    check = CheckResult(
+        results=[CommandResult(command="pytest -q", code=1, output=huge + "\nFAILED test_last")]
+    )
+
+    report = check.failure_report
+    assert report.endswith("FAILED test_last")
+    assert "dropped from the start" in report
+    assert len(report) < workspace.MAX_FAILURE_REPORT_CHARS * 2
 
 
 # --- verdicts ------------------------------------------------------------

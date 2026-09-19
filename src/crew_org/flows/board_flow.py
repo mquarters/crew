@@ -305,7 +305,11 @@ def refine_epics(
             )
         )
         try:
-            proposal = split_epic(epic_card.title, _goal_body(issues, repo, number)[:800])
+            # The whole epic body. It was cut at 800 characters while the Product
+            # Owner one step earlier was given its goal whole — and the Business
+            # Analyst is the role that writes the acceptance criteria, so what it
+            # cannot see becomes a criterion nobody can satisfy.
+            proposal = split_epic(epic_card.title, _goal_body(issues, repo, number))
         except Exception as exc:  # noqa: BLE001
             result.failed.append((number, f"{type(exc).__name__}: {exc}"))
             sink.emit(

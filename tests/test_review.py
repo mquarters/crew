@@ -128,6 +128,23 @@ def test_its_own_work_still_gets_the_findings(monkeypatch):
     assert "delete the import" in issues.submitted[0][2]
 
 
+# --- a diff too large to read ---------------------------------------------
+
+
+def test_a_diff_beyond_one_pass_is_not_approved():
+    """A 30,000-character head slice meant the Reviewer approved files it had
+    never seen, and its approval merges. Past the ceiling the honest verdict is
+    the one a person gives: too large to review, split it."""
+    from crew_org.crews.review_crew import MAX_DIFF_CHARS, review_diff
+
+    verdict = review_diff("Enormous", "+x\n" * MAX_DIFF_CHARS)
+
+    assert verdict.approve is False
+    assert verdict.event == "REQUEST_CHANGES"
+    assert verdict.findings, "a rejection has to say why"
+    assert "too large" in verdict.findings[0].concern.lower()
+
+
 # --- idempotency ---------------------------------------------------------
 
 

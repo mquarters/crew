@@ -18,8 +18,15 @@ from crew_org.tools.sandbox import Mode, Sandbox
 
 # A runaway test must not hang the tick.
 DEFAULT_TIMEOUT = 300
-# Enough failure output to repair from, not so much that it floods the prompt.
-MAX_OUTPUT_CHARS = 6000
+# What a command produced, kept whole. A head-and-tail slice of 3,000
+# characters each was "enough to repair from" only if the defect happened to
+# sit at one end: story #9's pytest run had thirteen failures, and the model
+# repaired three times from a view with the middle cut out before it blocked —
+# with 97% of a 262,144-token window unused.
+#
+# The ceiling below is a guard against a runaway command, not a prompt budget,
+# and it keeps the end: a test run puts its summary and its last failure there.
+MAX_FAILURE_REPORT_CHARS = 200_000
 
 # Credentials must not be visible to code the model wrote.
 STRIPPED_ENV = (
@@ -56,14 +63,26 @@ class CheckResult:
 
     @property
     def failure_report(self) -> str:
-        """What the Developer sees when repairing. Only the failures."""
+        """What the Developer sees when repairing. Only the failures, whole.
+
+        Bounded once, here, and only against a runaway command — never by the
+        old per-command slice, which cut every report whether it needed it or
+        not and cut it in the middle, where the failures are.
+        """
         parts = []
         for result in self.results:
             if result.ok:
                 continue
             reason = "timed out" if result.timed_out else f"exit {result.code}"
             parts.append(f"$ {result.command}\n({reason})\n{result.output}")
-        return "\n\n".join(parts)
+        report = "\n\n".join(parts)
+        if len(report) > MAX_FAILURE_REPORT_CHARS:
+            dropped = len(report) - MAX_FAILURE_REPORT_CHARS
+            report = (
+                f"… {dropped:,} characters dropped from the start of this report …\n\n"
+                + report[-MAX_FAILURE_REPORT_CHARS:]
+            )
+        return report
 
 
 def apply_implementation(worktree: Path, implementation) -> list[str]:
@@ -158,10 +177,6 @@ def run(
         return CommandResult(command=printable, code=127, output=str(exc))
 
     output = (completed.stdout + completed.stderr).strip()
-    if len(output) > MAX_OUTPUT_CHARS:
-        half = MAX_OUTPUT_CHARS // 2
-        elided = len(output) - MAX_OUTPUT_CHARS
-        output = f"{output[:half]}\n\n… {elided} characters elided …\n\n{output[-half:]}"
     return CommandResult(command=printable, code=completed.returncode, output=output)
 
 
