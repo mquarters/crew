@@ -68,7 +68,7 @@ allow more agents than that to be active at once:
 | Column | WIP limit |
 |---|---|
 | In Progress | 3 |
-| In Review | 3 |
+| Awaiting QA | 3 |
 | QA | 3 |
 
 Nine cards in flight, each with an agent, plus refinement work, exceeds eight

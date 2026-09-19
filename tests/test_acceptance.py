@@ -13,7 +13,12 @@ from pydantic import ValidationError
 from crew_org.crews.qa_crew import CriterionVerdict, QAVerdict
 from crew_org.crews.retro_crew import ProcessDefect
 from crew_org.events import EventSink
-from crew_org.flows.acceptance import DONE, close_finished_parents, in_review, render_qa
+from crew_org.flows.acceptance import (
+    DONE,
+    awaiting_qa,
+    close_finished_parents,
+    render_qa,
+)
 from crew_org.tools.github_project import Card
 
 
@@ -75,9 +80,9 @@ def story(number: int, status: str, work_type: str = "Story") -> Card:
     )
 
 
-def test_only_stories_in_review_are_verified():
-    cards = [story(6, "In Review"), story(7, "Sprint Backlog"), story(3, "In Review", "Epic")]
-    assert [c.number for c in in_review(cards)] == [6]
+def test_only_stories_awaiting_qa_are_verified():
+    cards = [story(6, "Awaiting QA"), story(7, "Sprint Backlog"), story(3, "Awaiting QA", "Epic")]
+    assert [c.number for c in awaiting_qa(cards)] == [6]
 
 
 # --- parents close themselves -------------------------------------------
@@ -110,7 +115,7 @@ def test_an_epic_closes_when_all_its_stories_are_done():
 
 def test_one_open_story_keeps_the_epic_open():
     """Close enough is not done."""
-    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, "QA")]
+    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, "Awaiting Approval")]
     issues = FakeIssues({3: [{"number": 6}, {"number": 7}]})
     board = FakeBoard()
     assert close_finished_parents(board, issues, EventSink(None), cards, repo="r") == []

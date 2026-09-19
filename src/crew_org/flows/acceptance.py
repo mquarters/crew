@@ -1,8 +1,13 @@
 """Acceptance: verifying delivered work, and closing out what is finished.
 
 QA judges behaviour against the acceptance criteria, which is a different
-question from the Reviewer's. A story only leaves In Review when every
+question from the Reviewer's. A story only leaves Awaiting QA when every
 criterion is proven by a test that actually exercises it.
+
+The columns say what a card is waiting for, not what is happening to it. A
+card sits in Awaiting QA until QA has finished with it — QA does not pull it
+into a lane of its own — and lands in Awaiting Approval already verified, where
+what it waits for is the Sponsor.
 
 Parent completion is bookkeeping the crew should not make a human do: an epic
 whose stories are all Done is done, and so is a goal whose epics are.
@@ -22,8 +27,8 @@ from crew_org.tools.github_project import Card, ProjectClient
 from crew_org.tools.sandbox import Sandbox
 
 IN_PROGRESS = "In Progress"
-IN_REVIEW = "In Review"
-QA = "QA"
+AWAITING_QA = "Awaiting QA"
+AWAITING_APPROVAL = "Awaiting Approval"
 DONE = "Done"
 STORY_TYPE = "Story"
 EPIC_TYPE = "Epic"
@@ -48,11 +53,11 @@ class AcceptanceResult:
     parents_closed: list[int] = field(default_factory=list)
 
 
-def in_review(cards: list[Card]) -> list[Card]:
+def awaiting_qa(cards: list[Card]) -> list[Card]:
     return [
         c
         for c in cards
-        if c.status == IN_REVIEW and c.work_type == STORY_TYPE and c.state != "CLOSED"
+        if c.status == AWAITING_QA and c.work_type == STORY_TYPE and c.state != "CLOSED"
     ]
 
 
@@ -92,10 +97,10 @@ def run_qa(
     cards: list[Card],
     repo: str,
 ) -> AcceptanceResult:
-    """Verify everything sitting In Review."""
+    """Verify everything sitting in Awaiting QA."""
     result = AcceptanceResult()
 
-    for card in in_review(cards):
+    for card in awaiting_qa(cards):
         number = card.number or 0
         if issues.has_comment_marked(repo, number, QA_MARKER):
             continue
@@ -134,7 +139,7 @@ def run_qa(
         issues.comment(repo, number, render_qa(verdict))
 
         if verdict.accepted:
-            board.set_status(card.item_id, QA)
+            board.set_status(card.item_id, AWAITING_APPROVAL)
             result.verified.append(QAOutcome(card=number, accepted=True))
         else:
             board.set_status(card.item_id, IN_PROGRESS)

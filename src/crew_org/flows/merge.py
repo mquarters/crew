@@ -20,7 +20,7 @@ from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
-QA = "QA"
+AWAITING_APPROVAL = "Awaiting Approval"
 DONE = "Done"
 BLOCKED = "Blocked"
 STORY_TYPE = "Story"
@@ -38,11 +38,11 @@ class MergeResult:
 
 
 def ready_to_land(cards: list[Card], repos: set[str] | None = None) -> list[Card]:
-    """Stories that have passed QA and are waiting to land."""
+    """Stories that have passed QA and are waiting for the Sponsor."""
     return [
         c
         for c in cards
-        if c.status == QA
+        if c.status == AWAITING_APPROVAL
         and c.work_type == STORY_TYPE
         and c.state != "CLOSED"
         and (repos is None or c.repo in repos)
@@ -118,7 +118,7 @@ def merge_approved(
                 kind=EventKind.CARD_MOVED,
                 card=number,
                 summary=f"merged PR #{pull['number']}",
-                **{"from": QA, "to": DONE},
+                **{"from": AWAITING_APPROVAL, "to": DONE},
             )
         )
 

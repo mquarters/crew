@@ -10,8 +10,8 @@ board:
     - Ready
     - Sprint Backlog
     - In Progress
-    - In Review
-    - QA
+    - Awaiting QA
+    - Awaiting Approval
     - Done
   blocked_column: Blocked
 
@@ -24,8 +24,8 @@ wip_limits:
   Ready: 10
   Sprint Backlog: 10
   In Progress: 3
-  In Review: 3
-  QA: 3
+  Awaiting QA: 3
+  Awaiting Approval: 3
 
 sprint:
   length_days: 14

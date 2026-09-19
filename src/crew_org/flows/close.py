@@ -17,7 +17,7 @@ from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
-QA = "QA"
+AWAITING_APPROVAL = "Awaiting Approval"
 DONE = "Done"
 STORY_TYPE = "Story"
 
@@ -67,7 +67,7 @@ def close_sprint(
         number = card.number or 0
         if card.status == DONE:
             continue
-        if card.status != QA:
+        if card.status != AWAITING_APPROVAL:
             result.still_open.append(number)
             continue
 
@@ -101,7 +101,7 @@ def close_sprint(
                 kind=EventKind.CARD_MOVED,
                 card=number,
                 summary=f"merged PR #{pull['number']}",
-                **{"from": QA, "to": DONE},
+                **{"from": AWAITING_APPROVAL, "to": DONE},
             )
         )
 

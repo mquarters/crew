@@ -35,7 +35,7 @@ from crew_org.tools.github_project import Card, ProjectClient
 
 SPRINT_BACKLOG = "Sprint Backlog"
 IN_PROGRESS = "In Progress"
-IN_REVIEW = "In Review"
+AWAITING_QA = "Awaiting QA"
 BLOCKED = "Blocked"
 STORY_TYPE = "Story"
 
@@ -118,7 +118,7 @@ def reconcile_orphans(
     next pass rather than assuming it was left tidy. This is what makes it a
     reconciliation loop rather than a script that must not be interrupted.
 
-    A card with an open pull request is not stranded; it belongs In Review.
+    A card with an open pull request is not stranded; it belongs in Awaiting QA.
     """
     in_progress = [c for c in cards if c.status == IN_PROGRESS and c.work_type == STORY_TYPE]
     if not in_progress:
@@ -134,13 +134,13 @@ def reconcile_orphans(
         number = card.number or 0
         branch = branch_name(number, card.title)
         if branch in open_prs:
-            board.set_status(card.item_id, IN_REVIEW)
+            board.set_status(card.item_id, AWAITING_QA)
             sink.emit(
                 CrewEvent(
                     kind=EventKind.CARD_MOVED,
                     card=number,
                     summary=f"already has PR #{open_prs[branch]} — moved to review",
-                    **{"from": IN_PROGRESS, "to": IN_REVIEW},
+                    **{"from": IN_PROGRESS, "to": AWAITING_QA},
                 )
             )
             continue
@@ -706,9 +706,9 @@ def deliver(
             continue
 
         if outcome.ok:
-            board.set_status(card.item_id, IN_REVIEW)
+            board.set_status(card.item_id, AWAITING_QA)
             counts[IN_PROGRESS] -= 1
-            counts[IN_REVIEW] = counts.get(IN_REVIEW, 0) + 1
+            counts[AWAITING_QA] = counts.get(AWAITING_QA, 0) + 1
             issues.comment(
                 repo,
                 card.number or 0,

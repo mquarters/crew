@@ -10,7 +10,7 @@ import pytest
 from crew_org.config import load_org
 from crew_org.process import ProcessRules, Refusal
 
-COLUMNS = ["Inbox (Goals)", "Needs Refinement", "Ready", "In Progress", "In Review", "Done"]
+COLUMNS = ["Inbox (Goals)", "Needs Refinement", "Ready", "In Progress", "Awaiting QA", "Done"]
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ def test_work_may_not_jump_a_gate(rules):
 
 
 def test_rework_backwards_is_always_allowed(rules):
-    assert rules.may_move(frm="In Review", to="In Progress", counts={}).allowed
-    assert rules.may_move(frm="In Review", to="Needs Refinement", counts={}).allowed
+    assert rules.may_move(frm="Awaiting QA", to="In Progress", counts={}).allowed
+    assert rules.may_move(frm="Awaiting QA", to="Needs Refinement", counts={}).allowed
 
 
 def test_agents_cannot_move_a_card_out_of_a_human_gate(rules):
@@ -68,7 +68,7 @@ def test_a_card_at_a_human_gate_cannot_even_be_blocked(rules):
 
 
 def test_unblocking_returns_to_the_flow_without_a_skip_complaint(rules):
-    assert rules.may_move(frm="Blocked", to="In Review", counts={}).allowed
+    assert rules.may_move(frm="Blocked", to="Awaiting QA", counts={}).allowed
 
 
 def test_a_full_column_refuses_new_work(rules):
@@ -84,7 +84,7 @@ def test_a_column_below_its_limit_accepts_work(rules):
 
 def test_wip_limits_apply_to_rework_too(rules):
     """Otherwise a full column could be refilled from the far side."""
-    v = rules.may_move(frm="In Review", to="In Progress", counts={"In Progress": 3})
+    v = rules.may_move(frm="Awaiting QA", to="In Progress", counts={"In Progress": 3})
     assert not v.allowed
     assert v.refusal is Refusal.WIP_LIMIT
 

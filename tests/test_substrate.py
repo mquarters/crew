@@ -114,7 +114,7 @@ def test_well_formed_tool_call_passes(server, monkeypatch):
                     {
                         "function": {
                             "name": "set_card_status",
-                            "arguments": json.dumps({"card": 42, "status": "In Review"}),
+                            "arguments": json.dumps({"card": 42, "status": "Awaiting QA"}),
                         }
                     }
                 ]

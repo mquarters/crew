@@ -161,10 +161,10 @@ def _synthetic_tick(sink: EventSink) -> None:
     emit(EventKind.AGENT_FINISHED, "PR #31 opened", "Developer", 7)
     emit(
         EventKind.CARD_MOVED,
-        "to In Review",
+        "to Awaiting QA",
         "Developer",
         7,
-        **{"from": "In Progress", "to": "In Review"},
+        **{"from": "In Progress", "to": "Awaiting QA"},
     )
 
     emit(EventKind.AGENT_STARTED, "design pagination strategy", "Architect", 9)
@@ -356,7 +356,7 @@ def qa() -> None:
     for number in result.parents_closed:
         console.print(f"[green]#{number}[/] closed — all children done")
     if not (result.verified or result.returned or result.failed):
-        console.print("[dim]Nothing In Review.[/]")
+        console.print("[dim]Nothing awaiting QA.[/]")
 
 
 @app.command()

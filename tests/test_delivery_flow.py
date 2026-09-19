@@ -171,7 +171,7 @@ def harness(tmp_path, monkeypatch):
         sink.subscribe(seen.append)
         org = {
             "board": {
-                "columns": ["Sprint Backlog", "In Progress", "In Review", "Done"],
+                "columns": ["Sprint Backlog", "In Progress", "Awaiting QA", "Done"],
                 "blocked_column": "Blocked",
                 "human_gates": [],
             },
@@ -212,12 +212,12 @@ def test_a_green_first_attempt_opens_a_pull_request(harness):
     assert result.delivered[0].pr == 101
     assert calls["escalate"] == 0
     assert ws.pushed == 1
-    assert ("S6", "In Review") in board.moves
+    assert ("S6", "Awaiting QA") in board.moves
 
 
 def test_the_card_moves_through_in_progress_first(harness):
     _, board, _, _, _, _ = harness(checks=[green()])
-    assert [m[1] for m in board.moves] == ["In Progress", "In Review"]
+    assert [m[1] for m in board.moves] == ["In Progress", "Awaiting QA"]
 
 
 # --- escalation discipline ----------------------------------------------
@@ -462,7 +462,7 @@ def test_a_stranded_card_with_an_open_pull_request_goes_to_review(harness, monke
     )
     result, board, _, _, _, _ = harness(checks=[green()], cards=[in_progress(6)])
     assert result.recovered == []
-    assert ("S6", "In Review") in board.moves
+    assert ("S6", "Awaiting QA") in board.moves
 
 
 def test_healing_does_not_touch_cards_that_are_where_they_belong(harness):
