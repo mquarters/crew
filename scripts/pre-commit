@@ -21,7 +21,12 @@ done <<< "$staged"
 
 # Credential-shaped content. Deliberately narrow: placeholders like
 # "sk-not-used" are fine, real-length tokens are not.
-PATTERN='(sk-ant-[a-zA-Z0-9-]{20,}|sk-[a-zA-Z0-9]{32,}|gh[pousr]_[a-zA-Z0-9]{30,}|github_pat_[a-zA-Z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY)'
+#
+# The sk- rule counts hyphens. It did not, and the proxy's master key — a
+# hyphenated 21-character string — sat in a committed compose file the whole
+# time, because it was neither 32 characters nor alphanumeric. A rule that
+# only recognises one shape of secret protects only that shape.
+PATTERN='(sk-ant-[a-zA-Z0-9-]{20,}|sk-[a-zA-Z0-9][a-zA-Z0-9-]{15,}|gh[pousr]_[a-zA-Z0-9]{30,}|github_pat_[a-zA-Z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY)'
 if git diff --cached -U0 | grep -qE "^\+.*$PATTERN"; then
   echo "BLOCKED: staged changes contain something shaped like a credential:"
   git diff --cached -U0 | grep -nE "^\+.*$PATTERN" | head -5

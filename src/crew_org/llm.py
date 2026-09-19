@@ -105,7 +105,7 @@ def health() -> tuple[bool, str]:
         return False, (
             f"LiteLLM proxy is not answering at {url}.\n"
             "  Start it with:  cd deploy/litellm && "
-            "SGLANG_BASE_URL=http://gx10-3703.local:8888/v1 docker compose up -d"
+            "docker compose --env-file ../../.env up -d"
         )
     if r.status_code in (401, 403):
         return False, (

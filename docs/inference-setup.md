@@ -131,9 +131,21 @@ backend's window. The Spark reports 262,144 when probed directly.
 
 ```bash
 cd deploy/litellm
-SGLANG_BASE_URL=http://<spark-host>:30000/v1 docker compose up -d
-curl -s http://localhost:4000/v1/models | jq
+docker compose --env-file ../../.env up -d
+curl -s -H "Authorization: Bearer $CREW_LLM_API_KEY" \
+     http://localhost:4000/v1/models | jq
 ```
+
+The `--env-file` is not optional. Compose looks for `.env` beside the compose
+file, which is not where the crew's `.env` lives; the compose file guards every
+credential with `:?`, so a missing env file stops the proxy from starting
+rather than starting it with no authentication.
+
+The proxy runs with a master key because it serves the Admin UI, so **every**
+call needs `Authorization: Bearer $CREW_LLM_API_KEY` — including `/v1/models`.
+An unauthenticated probe answers 401, which looks like a dead proxy and is not
+one. Sign in to the UI at <http://localhost:4000/ui> with `LITELLM_UI_USERNAME`
+and `LITELLM_UI_PASSWORD`.
 
 The proxy centralizes model aliases, request logging, and rate policy. Note the
 ordering: `crew doctor` talks to SGLang **directly**, so if the proxy is the

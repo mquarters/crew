@@ -42,7 +42,10 @@ def test_an_unreachable_proxy_says_how_to_start_it(proxy):
     ok, message = llm.health()
     assert not ok
     assert "not answering" in message
-    assert "docker compose up" in message
+    assert "docker compose" in message
+    # Without --env-file the compose guards refuse to start, so a start command
+    # that omits it is not a start command.
+    assert "--env-file" in message
 
 
 def test_a_proxy_that_rejects_the_key_is_not_reported_as_down(proxy, monkeypatch):
@@ -76,8 +79,8 @@ def test_settings_fall_back_to_the_env_file(monkeypatch, tmp_path):
     exactly where the credential lives."""
     monkeypatch.delenv("CREW_LLM_API_KEY", raising=False)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env").write_text("CREW_LLM_API_KEY=sk-from-the-env-file\n")
-    assert llm.api_key() == "sk-from-the-env-file"
+    (tmp_path / ".env").write_text("CREW_LLM_API_KEY=sk-from-env\n")
+    assert llm.api_key() == "sk-from-env"
 
 
 def test_an_absent_setting_falls_back_to_the_placeholder(monkeypatch, tmp_path):

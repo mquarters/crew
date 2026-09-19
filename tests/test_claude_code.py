@@ -116,7 +116,7 @@ def test_credentials_are_stripped_from_the_subprocess(monkeypatch, tmp_path):
 
 def test_no_anthropic_api_key_is_ever_passed(monkeypatch, tmp_path):
     """The cost guarantee is structural: escalation uses subscription OAuth."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-exist")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-nope")
     monkeypatch.setattr(claude_code, "available", lambda command="claude": True)
     seen: dict = {}
 

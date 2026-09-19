@@ -97,13 +97,15 @@ def test_no_credential_shaped_strings_in_the_repo():
     """CI enforcement of what scripts/pre-commit blocks locally.
 
     Deliberately narrow: short placeholders like "sk-not-used" are fine,
-    real-length tokens are not.
+    real-length tokens are not. The sk- rule counts hyphens: a hyphenated
+    21-character master key sat in a local compose file for weeks, and an
+    alphanumeric-only {32,} rule saw nothing wrong with it.
     """
     import re
 
     pattern = re.compile(
         r"sk-ant-[a-zA-Z0-9-]{20,}"
-        r"|sk-[a-zA-Z0-9]{32,}"
+        r"|sk-[a-zA-Z0-9][a-zA-Z0-9-]{15,}"
         r"|gh[pousr]_[a-zA-Z0-9]{30,}"
         r"|github_pat_[a-zA-Z0-9_]{20,}"
         r"|AKIA[0-9A-Z]{16}"
@@ -116,6 +118,22 @@ def test_no_credential_shaped_strings_in_the_repo():
         if pattern.search(path.read_text(errors="ignore")):
             offenders.append(str(path.relative_to(ROOT)))
     assert not offenders, f"credential-shaped strings in: {offenders}"
+
+
+def test_the_scan_catches_the_key_that_got_through(tmp_path, monkeypatch):
+    """A regression test for a real miss, not a hypothetical one."""
+    import re
+    import subprocess
+
+    hook = (ROOT / "scripts" / "pre-commit").read_text()
+    pattern = re.search(r"PATTERN='\((.+)\)'", hook).group(1)
+    # The shape that got through: hyphenated, and shorter than 32 characters.
+    # Written as a shape rather than as the key itself, so that this file does
+    # not become the thing it is guarding against.
+    hyphenated = "sk-" + "-".join(("master", "service", "123456"))
+    assert re.search(pattern, hyphenated), "the hook still misses hyphenated keys"
+    assert not re.search(pattern, "sk-not-used"), "placeholders must stay allowed"
+    assert subprocess.run(["bash", "-n", str(ROOT / "scripts" / "pre-commit")]).returncode == 0
 
 
 def test_secret_hygiene_rules_are_actually_installed():
