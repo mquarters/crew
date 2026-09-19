@@ -15,15 +15,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from crew_org.columns import BLOCKED, DONE, MERGING
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
-AWAITING_APPROVAL = "Awaiting Approval"
-DONE = "Done"
-BLOCKED = "Blocked"
 STORY_TYPE = "Story"
 
 # GitHub's word for "this branch and main have both changed the same lines".
@@ -43,7 +41,7 @@ def ready_to_land(cards: list[Card], repos: set[str] | None = None) -> list[Card
     return [
         c
         for c in cards
-        if c.status == AWAITING_APPROVAL
+        if c.status == MERGING
         and c.work_type == STORY_TYPE
         and c.state != "CLOSED"
         and (repos is None or c.repo in repos)
@@ -94,7 +92,7 @@ def merge_approved(
                 to=BLOCKED,
                 by=None,
                 card=number,
-                frm=AWAITING_APPROVAL,
+                frm=MERGING,
                 summary=f"merge conflict on PR #{pull['number']}",
                 kind=EventKind.CARD_BLOCKED,
             )
@@ -131,7 +129,7 @@ def merge_approved(
             to=DONE,
             by=None,
             card=number,
-            frm=AWAITING_APPROVAL,
+            frm=MERGING,
             summary=f"merged PR #{pull['number']}",
         )
         result.merged.append((number, pull["number"]))

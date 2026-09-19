@@ -78,7 +78,7 @@ def app_permissions() -> dict[str, str]:
 # The reviewing identity. GitHub refuses an approval from the app that opened
 # the pull request, so a single identity could never satisfy merge_approved —
 # the crew reviewed its own work, GitHub recorded COMMENTED, and every story
-# stopped in Awaiting Approval waiting for a person.
+# stopped in Merging waiting for a person.
 REVIEW_APP_PREFIX = "GITHUB_REVIEW_APP_"
 
 

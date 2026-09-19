@@ -28,19 +28,19 @@ def run(**kwargs):
 def test_a_move_records_the_role_on_the_card():
     """The board has always had an Owner Agent field and nothing ever wrote it,
     so every card showed that a machine acted and not which role."""
-    board, _ = run(item_id="I1", to="Awaiting QA", by="Developer", card=7)
+    board, _ = run(item_id="I1", to="QAing", by="Developer", card=7)
 
-    assert board.moves == [("I1", "Awaiting QA")]
+    assert board.moves == [("I1", "QAing")]
     assert board.owners == [("I1", "Developer")]
 
 
 def test_a_move_says_where_it_came_from_and_went_to():
     """The `**{"from": ..., "to": ...}` kwargs the old emits passed were dropped
     in silence — CrewEvent ignores extras — so detail was {} on every move."""
-    _, seen = run(item_id="I1", to="Done", by="Developer", card=7, frm="Awaiting Approval")
+    _, seen = run(item_id="I1", to="Done", by="Developer", card=7, frm="Merging")
 
     assert len(seen) == 1
-    assert seen[0].detail == {"from": "Awaiting Approval", "to": "Done"}
+    assert seen[0].detail == {"from": "Merging", "to": "Done"}
     assert seen[0].role == "Developer"
     assert seen[0].kind is EventKind.CARD_MOVED
 

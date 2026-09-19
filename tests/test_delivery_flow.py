@@ -178,7 +178,7 @@ def harness(tmp_path, monkeypatch):
         sink.subscribe(seen.append)
         org = {
             "board": {
-                "columns": ["Sprint Backlog", "In Progress", "Awaiting QA", "Done"],
+                "columns": ["Sprint Backlog", "In Progress", "Reviewing", "QAing", "Done"],
                 "blocked_column": "Blocked",
                 "human_gates": [],
             },
@@ -219,12 +219,12 @@ def test_a_green_first_attempt_opens_a_pull_request(harness):
     assert result.delivered[0].pr == 101
     assert calls["escalate"] == 0
     assert ws.pushed == 1
-    assert ("S6", "Awaiting QA") in board.moves
+    assert ("S6", "Reviewing") in board.moves
 
 
 def test_the_card_moves_through_in_progress_first(harness):
     _, board, _, _, _, _ = harness(checks=[green()])
-    assert [m[1] for m in board.moves] == ["In Progress", "Awaiting QA"]
+    assert [m[1] for m in board.moves] == ["In Progress", "Reviewing"]
 
 
 # --- escalation discipline ----------------------------------------------
@@ -465,7 +465,7 @@ def test_a_stranded_card_with_an_open_pull_request_goes_to_review(harness, monke
     )
     result, board, _, _, _, _ = harness(checks=[green()], cards=[in_progress(6)])
     assert result.recovered == []
-    assert ("S6", "Awaiting QA") in board.moves
+    assert ("S6", "Reviewing") in board.moves
 
 
 def test_healing_does_not_touch_cards_that_are_where_they_belong(harness):
@@ -586,7 +586,7 @@ def test_a_story_that_could_not_be_landed_says_why(harness):
     """merge_approved has always worked out why a ready story did not land, and
     the result dropped it on the floor: a run that silently skipped every merge
     looked exactly like a run with nothing to merge."""
-    approved = story(6).model_copy(update={"status": "Awaiting Approval"})
+    approved = story(6).model_copy(update={"status": "Merging"})
     result, *_ = harness(checks=[green()], cards=[approved, story(7)])
 
     assert result.landed == []
@@ -597,7 +597,7 @@ def test_a_dry_run_does_not_merge(harness):
     """`deliver` merged to the default branch and closed cards whatever dry_run
     said, under a command whose help reads "dry by default". A flag meaning
     "change nothing" has to mean it where the change is a merge to main."""
-    approved = story(6).model_copy(update={"status": "Awaiting Approval"})
+    approved = story(6).model_copy(update={"status": "Merging"})
     result, board, issues, _, _, _ = harness(
         checks=[green()], cards=[approved, story(7)], dry_run=True
     )

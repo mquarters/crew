@@ -202,3 +202,104 @@ def test_the_review_names_the_file_and_the_action():
 
 def test_an_approval_says_so_plainly():
     assert "No findings." in render_review(APPROVAL)
+
+
+# --- review drains its own column ----------------------------------------
+
+
+class FakeBoard:
+    def __init__(self):
+        self.moves = []
+        self.owners = []
+
+    def set_status(self, item_id, column):
+        self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
+
+
+def waiting_card(number=6, status="Reviewing"):
+    from crew_org.tools.github_project import Card
+
+    return Card(
+        item_id=f"S{number}",
+        number=number,
+        title=f"Show metric {number}",
+        status=status,
+        state="OPEN",
+        work_type="Story",
+        repo="sprint-metrics",
+    )
+
+
+def run_with_board(issues, verdict, monkeypatch, cards):
+    monkeypatch.setattr(review_flow, "review_diff", lambda *a, **k: verdict)
+    board = FakeBoard()
+    result = review_open_pulls(
+        issues,
+        EventSink(None),
+        repo="sprint-metrics",
+        bot_login=BOT,
+        board=board,
+        cards=cards,
+    )
+    return result, board
+
+
+# The delivery identity, which is not the reviewing one — that separation is
+# the whole reason a crew pull request can be approved at all.
+DELIVERY_BOT = "mqucifer-crew-delivery[bot]"
+
+
+def crew_pull(number=14, branch="feat/6-show-metric-6", author=DELIVERY_BOT):
+    p = pull(number=number, author=author)
+    p["head"] = {"ref": branch}
+    return p
+
+
+def test_an_approved_diff_sends_the_card_to_qa(monkeypatch):
+    """Review was the one phase that read the board and never touched it, so a
+    card's column could not tell you whether it had been reviewed."""
+    _, board = run_with_board(FakeIssues([crew_pull()]), APPROVAL, monkeypatch, [waiting_card()])
+
+    assert board.moves == [("S6", "QAing")]
+    assert ("S6", "Code Reviewer") in board.owners
+
+
+def test_changes_requested_sends_the_card_back(monkeypatch):
+    """A queue a phase never drains is not a queue."""
+    _, board = run_with_board(FakeIssues([crew_pull()]), REJECTION, monkeypatch, [waiting_card()])
+
+    assert board.moves == [("S6", "In Progress")]
+
+
+def test_a_pull_request_with_no_card_is_still_reviewed(monkeypatch):
+    """A human's change is reviewed on the same terms as the crew's, and a
+    human's change has no card. The board is what a verdict is applied to, not
+    what is iterated."""
+    issues = FakeIssues([pull(author=HUMAN)])
+    result, board = run_with_board(issues, APPROVAL, monkeypatch, [waiting_card()])
+
+    assert result.reviewed, "reviewed anyway"
+    assert issues.submitted[0][1] == "APPROVE"
+    assert board.moves == [], "and moved nothing"
+
+
+def test_a_card_whose_review_was_downgraded_stays_put(monkeypatch):
+    """A COMMENT is the reviewing identity refusing to judge its own pull
+    request. That is not a verdict, so the card is not moved on it."""
+    _, board = run_with_board(
+        FakeIssues([crew_pull(author=BOT)]), APPROVAL, monkeypatch, [waiting_card()]
+    )
+
+    assert board.moves == []
+
+
+def test_a_card_not_in_reviewing_is_not_moved(monkeypatch):
+    """Only the column review owns is drained by review."""
+    _, board = run_with_board(
+        FakeIssues([crew_pull()]), APPROVAL, monkeypatch, [waiting_card(status="QAing")]
+    )
+
+    assert board.moves == []

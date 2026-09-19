@@ -1,12 +1,12 @@
 """Acceptance: verifying delivered work, and closing out what is finished.
 
 QA judges behaviour against the acceptance criteria, which is a different
-question from the Reviewer's. A story only leaves Awaiting QA when every
+question from the Reviewer's. A story only leaves QAing when every
 criterion is proven by a test that actually exercises it.
 
 The columns say what a card is waiting for, not what is happening to it. A
-card sits in Awaiting QA until QA has finished with it — QA does not pull it
-into a lane of its own — and lands in Awaiting Approval already verified, where
+card sits in QAing until QA has finished with it — QA does not pull it
+into a lane of its own — and lands in Merging already verified, where
 what it waits for is the Sponsor.
 
 Parent completion is bookkeeping the crew should not make a human do: an epic
@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from crew_org.columns import DONE, IN_PROGRESS, MERGING, QAING
 from crew_org.crews.qa_crew import QAVerdict, verify_story
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.moves import move_card
@@ -48,10 +49,6 @@ QA_CONTEXT_CHAR_CEILING = 600_000
 # front of it is the same mistake delivery already learned not to make.
 QA_OUTPUT_CHAR_CEILING = 40_000
 
-IN_PROGRESS = "In Progress"
-AWAITING_QA = "Awaiting QA"
-AWAITING_APPROVAL = "Awaiting Approval"
-DONE = "Done"
 STORY_TYPE = "Story"
 EPIC_TYPE = "Epic"
 GOAL_TYPE = "Goal"
@@ -81,9 +78,7 @@ class AcceptanceResult:
 
 def awaiting_qa(cards: list[Card]) -> list[Card]:
     return [
-        c
-        for c in cards
-        if c.status == AWAITING_QA and c.work_type == STORY_TYPE and c.state != "CLOSED"
+        c for c in cards if c.status == QAING and c.work_type == STORY_TYPE and c.state != "CLOSED"
     ]
 
 
@@ -149,7 +144,7 @@ def run_qa(
     cards: list[Card],
     repo: str,
 ) -> AcceptanceResult:
-    """Verify everything sitting in Awaiting QA."""
+    """Verify everything sitting in QAing."""
     result = AcceptanceResult()
 
     for card in awaiting_qa(cards):
@@ -195,10 +190,10 @@ def run_qa(
                 board,
                 sink,
                 item_id=card.item_id,
-                to=AWAITING_APPROVAL,
+                to=MERGING,
                 by="QA Engineer",
                 card=number,
-                frm=AWAITING_QA,
+                frm=QAING,
                 summary="every criterion proven",
             )
             result.verified.append(QAOutcome(card=number, accepted=True))
@@ -210,7 +205,7 @@ def run_qa(
                 to=IN_PROGRESS,
                 by="QA Engineer",
                 card=number,
-                frm=AWAITING_QA,
+                frm=QAING,
                 summary=f"returned — {len(verdict.unproven)} unproven",
             )
             outcome = QAOutcome(

@@ -250,7 +250,7 @@ def probe_tool_calling(base_url: str, model: str) -> ProbeResult:
         out = _chat(
             base_url,
             model,
-            messages=[{"role": "user", "content": "Move card 42 to the Awaiting QA column."}],
+            messages=[{"role": "user", "content": "Move card 42 to the QAing column."}],
             tools=TOOL_SPEC,
             tool_choice="auto",
             max_tokens=256,
