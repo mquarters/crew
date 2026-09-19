@@ -174,11 +174,19 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
     agents = build_agents("developer")
     repair = (
         f"\n\nA previous attempt failed. Fix it.\n\n{feedback}\n\n"
-        "The repository section above shows what that attempt actually wrote. "
-        "Work from it: change what is broken and keep the rest, rather than "
-        "redesigning the module layout — a layout change that leaves the tests "
-        "importing from the old location fails in exactly the same way.\n"
-        "Return the complete corrected files, not a patch."
+        "## What is already in the repository\n\n"
+        "Your previous attempt has ALREADY BEEN WRITTEN. Every definition it "
+        "added is in the listing above and is in the files right now. That "
+        "changes what you return:\n\n"
+        "- Return ONLY the edits that fix the failure. Not the implementation "
+        "again — re-sending work that already landed is how a repair fails.\n"
+        "- To change something your last attempt added, use `replace`. Using "
+        "`add` on a name already in the listing is rejected, and that name is "
+        "there because you put it there.\n"
+        "- If a definition is already correct, say nothing about it.\n\n"
+        "Change what is broken and keep the rest. Do not redesign the module "
+        "layout — a layout change that leaves the tests importing from the old "
+        "location fails in exactly the same way."
         if feedback
         else ""
     )
@@ -194,7 +202,9 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
             + f"## The repository as it stands\n\n{context}\n"
             + repair
         ),
-        expected_output="A summary and the complete contents of every file to write.",
+        expected_output=(
+            "A summary, plus the new files and the named edits that implement the story."
+        ),
         agent=agents["developer"],
         output_pydantic=Implementation,
     )

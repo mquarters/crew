@@ -128,3 +128,50 @@ def test_an_edit_path_cannot_escape_the_repository():
 
     with pytest.raises(ValidationError):
         FileEdit(path="../../etc/passwd", operation="add", target="f", source="x = 1")
+
+
+# --- what a repair is told ------------------------------------------------
+
+
+def _repair_prompt(feedback: str = "1 failed") -> str:
+    """The task description the Developer sees on a repair."""
+    import crew_org.crews.delivery_crew as dc
+
+    captured: dict[str, str] = {}
+
+    class FakeTask:
+        def __init__(self, *, description, **_kw):
+            captured["description"] = description
+
+    original_task, original_crew = dc.Task, dc.Crew
+    dc.Task = FakeTask
+    try:
+        dc.implement_story("a story", context="### Files", feedback=feedback)
+    except Exception:  # noqa: BLE001, S110 — only the prompt is under test
+        pass
+    finally:
+        dc.Task, dc.Crew = original_task, original_crew
+    return captured.get("description", "")
+
+
+def test_a_repair_is_told_its_previous_attempt_is_already_written():
+    """Story #10 tried to `add` a test its own earlier attempt had added, then
+    returned nothing at all. The worktree accumulates across attempts, so a
+    repair that does not know this re-sends work that already landed."""
+    prompt = _repair_prompt()
+    assert "ALREADY BEEN WRITTEN" in prompt
+    assert "replace" in prompt
+
+
+def test_a_repair_is_not_asked_for_whole_files():
+    """`Return the complete corrected files` survived from the whole-file
+    schema (46fb8c6) through the move to editing by name (f8bb521), and
+    contradicted the standing instructions on every repair."""
+    prompt = _repair_prompt()
+    assert "complete corrected files" not in prompt
+    assert "Return ONLY the edits" in prompt
+
+
+def test_a_first_attempt_carries_no_repair_block():
+    """The repair text must not enter the cacheable prefix of a fresh attempt."""
+    assert "ALREADY BEEN WRITTEN" not in _repair_prompt(feedback="")
