@@ -53,6 +53,7 @@ def red(output: str = "2 failed") -> CheckResult:
 class FakeBoard:
     def __init__(self, cards):
         self._cards, self.moves = cards, []
+        self.owners = []
 
     def cards(self):
         return self._cards
@@ -66,6 +67,9 @@ class FakeBoard:
 
     def set_status(self, item_id, column):
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
 
 
 class FakeIssues:
@@ -583,6 +587,30 @@ def test_a_story_that_could_not_be_landed_says_why(harness):
 
     assert result.landed == []
     assert result.unmergeable == [(6, "no open pull request")]
+
+
+# --- attribution ---------------------------------------------------------
+
+
+def test_the_developer_owns_the_card_it_claimed(harness):
+    """The board has always had an Owner Agent field and nothing wrote it, so
+    every card said a machine had acted and not which role."""
+    _, board, _, _, _, _ = harness(checks=[green()])
+
+    assert ("S6", "Developer") in board.owners
+
+
+def test_healing_an_interrupted_run_claims_nothing(harness, monkeypatch):
+    """Orphan reconciliation moves a card nobody decided to move. Attributing
+    that to a role is a guess, and a wrong owner is worse than none."""
+    stranded = story(6).model_copy(update={"status": "In Progress"})
+    _, board, _, _, _, seen = harness(checks=[green()], cards=[stranded])
+
+    assert ("S6", "Sprint Backlog") in board.moves
+    assert board.owners == [], "no role stranded it, so no role claims it"
+    moved = [e for e in seen if e.kind is EventKind.CARD_MOVED and e.role is None]
+    assert moved, "still reported, just not attributed"
+    assert moved[0].detail["from"] == "In Progress"
 
 
 # --- the regression guard in the loop -----------------------------------

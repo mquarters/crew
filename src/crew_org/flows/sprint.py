@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.process import ProcessRules
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
@@ -161,7 +162,16 @@ def start_sprint(
                 piece.deferred.append(number)
                 continue
             board.set_iteration(card.item_id, "Sprint", sprint)
-            board.set_status(card.item_id, SPRINT_BACKLOG)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=SPRINT_BACKLOG,
+                by="Scrum Master",
+                card=number,
+                frm=READY,
+                summary=f"admitted to {sprint}",
+            )
             counts[SPRINT_BACKLOG] = counts.get(SPRINT_BACKLOG, 0) + 1
 
         piece.admitted = [n for n in piece.admitted if n not in piece.deferred]

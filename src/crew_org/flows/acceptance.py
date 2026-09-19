@@ -20,6 +20,7 @@ from pathlib import Path
 
 from crew_org.crews.qa_crew import QAVerdict, verify_story
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.tools import workspace
 from crew_org.tools.github_issues import IssueClient
@@ -183,10 +184,28 @@ def run_qa(
         issues.comment(repo, number, render_qa(verdict))
 
         if verdict.accepted:
-            board.set_status(card.item_id, AWAITING_APPROVAL)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_APPROVAL,
+                by="QA Engineer",
+                card=number,
+                frm=AWAITING_QA,
+                summary="every criterion proven",
+            )
             result.verified.append(QAOutcome(card=number, accepted=True))
         else:
-            board.set_status(card.item_id, IN_PROGRESS)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=IN_PROGRESS,
+                by="QA Engineer",
+                card=number,
+                frm=AWAITING_QA,
+                summary=f"returned — {len(verdict.unproven)} unproven",
+            )
             outcome = QAOutcome(
                 card=number,
                 accepted=False,
@@ -247,14 +266,16 @@ def close_finished_parents(
             if not statuses or any(status != DONE for status in statuses):
                 continue
 
-            board.set_status(card.item_id, DONE)
-            closed.append(card.number or 0)
-            sink.emit(
-                CrewEvent(
-                    kind=EventKind.CARD_MOVED,
-                    card=card.number,
-                    summary=f"all {len(statuses)} children done — closing {parent_type.lower()}",
-                    **{"to": DONE},
-                )
+            # Bookkeeping, not judgement: no role decided this, so the parent
+            # keeps whichever role last worked on it.
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=DONE,
+                by=None,
+                card=card.number,
+                summary=f"all {len(statuses)} children done — closing {parent_type.lower()}",
             )
+            closed.append(card.number or 0)
     return closed

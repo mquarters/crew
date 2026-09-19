@@ -27,6 +27,7 @@ from crew_org.escalation import (
 )
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.merge import merge_approved
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.process import ProcessRules
 from crew_org.tools import claude_code, regression, workspace
@@ -145,27 +146,29 @@ def reconcile_orphans(
         number = card.number or 0
         branch = branch_name(number, card.title)
         if branch in open_prs:
-            board.set_status(card.item_id, AWAITING_QA)
-            sink.emit(
-                CrewEvent(
-                    kind=EventKind.CARD_MOVED,
-                    card=number,
-                    summary=f"already has PR #{open_prs[branch]} — moved to review",
-                    **{"from": IN_PROGRESS, "to": AWAITING_QA},
-                )
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_QA,
+                by=None,
+                card=number,
+                frm=IN_PROGRESS,
+                summary=f"already has PR #{open_prs[branch]} — moved to review",
             )
             continue
 
-        board.set_status(card.item_id, SPRINT_BACKLOG)
-        recovered.append(number)
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                card=number,
-                summary="stranded In Progress with no PR — returned to the backlog",
-                **{"from": IN_PROGRESS, "to": SPRINT_BACKLOG},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=SPRINT_BACKLOG,
+            by=None,
+            card=number,
+            frm=IN_PROGRESS,
+            summary="stranded In Progress with no PR — returned to the backlog",
         )
+        recovered.append(number)
     return recovered
 
 
@@ -674,17 +677,17 @@ def deliver(
             sink.note(EventKind.NOTE, verdict.reason)
             break
 
-        board.set_status(card.item_id, IN_PROGRESS)
-        counts[IN_PROGRESS] = counts.get(IN_PROGRESS, 0) + 1
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                role="Developer",
-                card=card.number,
-                summary=card.title[:60],
-                **{"from": SPRINT_BACKLOG, "to": IN_PROGRESS},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=IN_PROGRESS,
+            by="Developer",
+            card=card.number,
+            frm=SPRINT_BACKLOG,
+            summary=card.title[:60],
         )
+        counts[IN_PROGRESS] = counts.get(IN_PROGRESS, 0) + 1
 
         # The card names its own repository. Using a global default would
         # implement a card belonging to one repo inside another, silently.
@@ -723,13 +726,31 @@ def deliver(
 
         if outcome.ok and dry_run:
             # Put the card back: a dry run must leave the board as it found it.
-            board.set_status(card.item_id, SPRINT_BACKLOG)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=SPRINT_BACKLOG,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary="dry run — verified, nothing landed",
+            )
             counts[IN_PROGRESS] -= 1
             result.delivered.append(outcome)
             continue
 
         if outcome.ok:
-            board.set_status(card.item_id, AWAITING_QA)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_QA,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary=f"delivered — PR #{outcome.pr}",
+            )
             counts[IN_PROGRESS] -= 1
             counts[AWAITING_QA] = counts.get(AWAITING_QA, 0) + 1
             issues.comment(
@@ -740,11 +761,30 @@ def deliver(
             )
             result.delivered.append(outcome)
         elif dry_run:
-            board.set_status(card.item_id, SPRINT_BACKLOG)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=SPRINT_BACKLOG,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary="dry run — not verified, nothing landed",
+            )
             counts[IN_PROGRESS] -= 1
             result.blocked.append(outcome)
         else:
-            board.set_status(card.item_id, BLOCKED)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=BLOCKED,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary=(outcome.blocked_reason or "")[:80],
+                kind=EventKind.CARD_BLOCKED,
+            )
             counts[IN_PROGRESS] -= 1
             issues.add_labels(repo, card.number or 0, ["blocked"])
             issues.comment(

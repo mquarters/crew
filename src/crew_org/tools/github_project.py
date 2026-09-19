@@ -321,6 +321,14 @@ class ProjectClient:
         """Move a card. Legality is the caller's business — see crew_org.process."""
         self.set_select(item_id, "Status", column)
 
+    def set_owner_agent(self, item_id: str, role: str) -> None:
+        """Record which agent role last acted on this card.
+
+        The field has always existed on the board and nothing ever wrote it, so
+        every card showed that a machine had acted and not which role.
+        """
+        self.set_select(item_id, "Owner Agent", role)
+
     def set_select(self, item_id: str, field: str, option: str) -> None:
         self._call(
             _SET_SELECT,

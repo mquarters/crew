@@ -104,6 +104,7 @@ class FakeBoard:
     def __init__(self, cards: list[Card]) -> None:
         self._cards = cards
         self.moves: list[tuple[str, str]] = []
+        self.owners: list[tuple[str, str]] = []
         self.added: list[str] = []
         self.selects: list[tuple[str, str, str]] = []
 
@@ -126,6 +127,9 @@ class FakeBoard:
 
     def set_status(self, item_id: str, column: str) -> None:
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id: str, role: str) -> None:
+        self.owners.append((item_id, role))
 
     def set_select(self, item_id: str, field: str, option: str) -> None:
         self.selects.append((item_id, field, option))

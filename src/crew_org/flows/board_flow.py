@@ -29,6 +29,7 @@ from crew_org.crews.refinement_crew import (
 )
 from crew_org.design import DesignPolicy, EpicShape
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.process import ProcessRules
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
@@ -177,7 +178,15 @@ def create_epic_cards(
         created[epic.title] = number
 
         item = board.add_issue(issue["node_id"])
-        board.set_status(item, INBOX)
+        move_card(
+            board,
+            sink,
+            item_id=item,
+            to=INBOX,
+            by="Product Owner",
+            card=number,
+            summary=f"epic card created — {epic.title[:50]}",
+        )
         board.set_select(item, "Work Type", EPIC_TYPE)
         if goal.priority:
             board.set_select(item, "Priority", goal.priority)
@@ -195,15 +204,6 @@ def create_epic_cards(
                 )
             )
 
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                role="Product Owner",
-                card=number,
-                summary=f"epic card created — {epic.title[:50]}",
-                **{"to": INBOX},
-            )
-        )
     return created
 
 
@@ -339,7 +339,15 @@ def refine_epics(
             # enter waits in refinement rather than being dropped.
             verdict = rules.may_move(frm=REFINEMENT, to=READY, counts=counts)
             column = READY if verdict.allowed else REFINEMENT
-            board.set_status(item, column)
+            move_card(
+                board,
+                sink,
+                item_id=item,
+                to=column,
+                by="Business Analyst",
+                card=issue["number"],
+                summary=f"story card created — {story.title[:50]}",
+            )
             counts[column] = counts.get(column, 0) + 1
             if not verdict.allowed:
                 sink.emit(

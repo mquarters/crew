@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
@@ -84,7 +85,19 @@ def merge_approved(
             continue
 
         if detail.get("mergeable_state") == CONFLICTED or detail.get("mergeable") is False:
-            board.set_status(card.item_id, BLOCKED)
+            # Two changes disagree. No role made that happen, so the card keeps
+            # the role whose work is stuck.
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=BLOCKED,
+                by=None,
+                card=number,
+                frm=AWAITING_APPROVAL,
+                summary=f"merge conflict on PR #{pull['number']}",
+                kind=EventKind.CARD_BLOCKED,
+            )
             issues.add_labels(repo, number, ["blocked", "needs:human"])
             issues.comment(
                 repo,
@@ -111,15 +124,16 @@ def merge_approved(
             result.failed.append((number, str(exc)[:120]))
             continue
 
-        board.set_status(card.item_id, DONE)
-        result.merged.append((number, pull["number"]))
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                card=number,
-                summary=f"merged PR #{pull['number']}",
-                **{"from": AWAITING_APPROVAL, "to": DONE},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=DONE,
+            by=None,
+            card=number,
+            frm=AWAITING_APPROVAL,
+            summary=f"merged PR #{pull['number']}",
         )
+        result.merged.append((number, pull["number"]))
 
     return result

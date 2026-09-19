@@ -147,9 +147,13 @@ def test_only_stories_awaiting_qa_are_verified():
 class FakeBoard:
     def __init__(self):
         self.moves = []
+        self.owners = []
 
     def set_status(self, item_id, column):
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
 
 
 class FakeIssues:
@@ -167,6 +171,19 @@ def test_an_epic_closes_when_all_its_stories_are_done():
     closed = close_finished_parents(board, issues, EventSink(None), cards, repo="r")
     assert closed == [3]
     assert ("C3", DONE) in board.moves
+
+
+def test_a_parent_closing_claims_the_card_for_nobody():
+    """Bookkeeping, not judgement. An epic whose children are all done closes
+    itself, so the card keeps whichever role last actually worked on it rather
+    than being attributed to one that did not act."""
+    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, DONE)]
+    issues = FakeIssues({3: [{"number": 6}, {"number": 7}]})
+    board = FakeBoard()
+    close_finished_parents(board, issues, EventSink(None), cards, repo="r")
+
+    assert ("C3", DONE) in board.moves
+    assert board.owners == []
 
 
 def test_one_open_story_keeps_the_epic_open():

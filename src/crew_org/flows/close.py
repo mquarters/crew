@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 from crew_org.crews.retro_crew import Retro, write_retro
 from crew_org.escalation import EscalationLedger
-from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.events import EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
@@ -94,16 +95,17 @@ def close_sprint(
             result.unmergeable.append((number, str(exc)[:120]))
             continue
 
-        board.set_status(card.item_id, DONE)
-        result.merged.append(number)
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                card=number,
-                summary=f"merged PR #{pull['number']}",
-                **{"from": AWAITING_APPROVAL, "to": DONE},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=DONE,
+            by=None,
+            card=number,
+            frm=AWAITING_APPROVAL,
+            summary=f"merged PR #{pull['number']}",
         )
+        result.merged.append(number)
 
     # Report the outcome alongside the failure. Without it an escalation reads
     # as an unresolved failure and the retro concludes the story was shipped

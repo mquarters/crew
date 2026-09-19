@@ -32,9 +32,13 @@ def card(number: int, status: str = "Awaiting Approval", repo: str = "sprint-met
 class FakeBoard:
     def __init__(self):
         self.moves = []
+        self.owners = []
 
     def set_status(self, item_id, column):
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
 
 
 class FakeIssues:
