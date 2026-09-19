@@ -12,6 +12,11 @@ predecessors. A pass that moves nothing is quiescence, and the tick stops.
 A phase that fails does not end the pass. The later phases act on the cards
 they can, and the failure is reported beside what did happen — a tick that
 aborts on the first error leaves the board in a state nobody chose.
+
+`dry_run` draws its line at what cannot be walked back: nothing is merged,
+pushed or opened. Refining, admitting and verifying still happen, because they
+are board state a Sponsor can undo by moving a card, and a dry tick that
+skipped them would show nothing of what the loop does.
 """
 
 from __future__ import annotations
@@ -111,8 +116,10 @@ def _admit(crew: Crew, *, dry_run: bool) -> PhaseOutcome:
     """
     from crew_org.flows.sprint import start_sprint  # noqa: PLC0415
 
-    if dry_run:
-        return PhaseOutcome("admit", summary="not admitted — dry run")
+    # Not gated on `dry_run`. Dry means nothing is merged, pushed or opened —
+    # the line a Sponsor cannot walk back. Admitting a story is board state
+    # like refining one, undone by moving the card, and gating it would stop a
+    # dry tick one hop short of showing what the loop actually does.
     plan = start_sprint(
         crew.board,
         crew.issues,
