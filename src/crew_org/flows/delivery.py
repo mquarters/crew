@@ -25,7 +25,7 @@ from crew_org.escalation import (
     utcnow,
 )
 from crew_org.events import CrewEvent, EventKind, EventSink
-from crew_org.flows.merge import merge_approved
+from crew_org.flows.merge import merge_approved, ready_to_land
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.process import ProcessRules
@@ -95,6 +95,9 @@ class DeliveryResult:
     # skipped every merge looked exactly like a run with nothing to merge.
     awaiting_approval: list[tuple[int, int]] = field(default_factory=list)
     unmergeable: list[tuple[int, str]] = field(default_factory=list)
+    # What a real run would have merged. A dry run must not merge, and must
+    # still say what it declined to do.
+    would_land: list[int] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -540,13 +543,22 @@ def deliver(
 
     # Land first, then branch. A story that branches from a main missing its
     # predecessors is a conflict scheduled for later.
-    landed = merge_approved(board, issues, sink, cards=cards, default_repo=repo, repos=repos)
-    result.landed = [card for card, _pr in landed.merged]
-    result.conflicted = [card for card, _pr in landed.conflicted]
-    result.awaiting_approval = list(landed.awaiting_approval)
-    result.unmergeable = list(landed.failed)
-    if landed.merged or landed.conflicted:
-        cards = board.cards()
+    #
+    # Not on a dry run. This merged to the default branch and closed cards
+    # whatever `dry_run` said, under a command whose help reads "dry by
+    # default: the diff is shown rather than landed" — true of the new work and
+    # never true of the merge. A flag that means "change nothing" has to mean it
+    # everywhere, most of all where the change is a merge to main.
+    if dry_run:
+        result.would_land = [c.number or 0 for c in ready_to_land(cards, repos)]
+    else:
+        landed = merge_approved(board, issues, sink, cards=cards, default_repo=repo, repos=repos)
+        result.landed = [card for card, _pr in landed.merged]
+        result.conflicted = [card for card, _pr in landed.conflicted]
+        result.awaiting_approval = list(landed.awaiting_approval)
+        result.unmergeable = list(landed.failed)
+        if landed.merged or landed.conflicted:
+            cards = board.cards()
 
     # Heal before acting: an interrupted run leaves cards claimed by nobody.
     recovered = reconcile_orphans(board, issues, sink, cards, repo=repo)

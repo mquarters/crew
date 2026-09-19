@@ -593,6 +593,20 @@ def test_a_story_that_could_not_be_landed_says_why(harness):
     assert result.unmergeable == [(6, "no open pull request")]
 
 
+def test_a_dry_run_does_not_merge(harness):
+    """`deliver` merged to the default branch and closed cards whatever dry_run
+    said, under a command whose help reads "dry by default". A flag meaning
+    "change nothing" has to mean it where the change is a merge to main."""
+    approved = story(6).model_copy(update={"status": "Awaiting Approval"})
+    result, board, issues, _, _, _ = harness(
+        checks=[green()], cards=[approved, story(7)], dry_run=True
+    )
+
+    assert result.landed == [], "nothing merged"
+    assert result.would_land == [6], "and it said what it declined to merge"
+    assert ("S6", "Done") not in board.moves
+
+
 # --- attribution ---------------------------------------------------------
 
 

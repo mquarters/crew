@@ -35,29 +35,41 @@ def _sink(dry_run: bool) -> EventSink:
 
 @app.command()
 def tick(
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Render the live view from synthetic events. Needs no model."
+    land: bool = typer.Option(
+        False, "--land", help="Actually merge, push and open PRs. Off by default."
     ),
+    demo: bool = typer.Option(
+        False, "--demo", help="Render the live view from synthetic events. Needs no model."
+    ),
+    passes: int = typer.Option(None, "--passes", help="Cap the number of passes."),
 ) -> None:
-    """Drain every actionable card until the board is stable or hits a gate."""
+    """Take the board as far as it can go: refine, admit, review, verify, land, deliver.
+
+    Runs to quiescence — a pass that moves nothing ends it. Dry by default: it
+    reads, refines and verifies, and neither merges nor opens a pull request
+    until you pass --land.
+    """
     org = load_org()
-    sink = _sink(dry_run)
+    sink = _sink(demo)
     view = LiveView(org["board"]["columns"], budget=org["sprint"]["escalation_budget"])
 
-    if dry_run:
+    if demo:
         with attach(sink, view):
             _synthetic_tick(sink)
         return
 
     # The proxy is project-scoped and will not always be running. Say so plainly
     # rather than surfacing a connection error from deep inside an agent.
-    from crew_org.auth import resolve_credentials
+    from crew_org.auth import REVIEW_APP_PREFIX, resolve_credentials
     from crew_org.config import load_env
-    from crew_org.flows.board_flow import tick as run_tick
+    from crew_org.escalation import EscalationLedger, EscalationPolicy
+    from crew_org.flows import loop
     from crew_org.git_ops import Workspace
     from crew_org.llm import health
+    from crew_org.process import ProcessRules
     from crew_org.tools.github_issues import IssueClient
     from crew_org.tools.github_project import ProjectClient
+    from crew_org.tools.sandbox import Sandbox
 
     ok, message = health()
     if not ok:
@@ -65,52 +77,92 @@ def tick(
         raise typer.Exit(code=1)
     console.print(f"[dim]{message}[/]")
 
+    sandbox = Sandbox.from_config(org)
+    unavailable = sandbox.unavailable_reason()
+    if unavailable:
+        console.print(f"[red]Sandbox unavailable.[/] {unavailable}")
+        raise typer.Exit(code=1)
+
     env = load_env()
     try:
         token, identity = resolve_credentials(env)
+        review_token, review_identity = resolve_credentials(env, prefix=REVIEW_APP_PREFIX)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(code=2) from exc
-    console.print(f"[dim]acting as {escape(identity)}[/]")
 
     owner = env["GITHUB_OWNER"]
     repo = env.get("PILOT_REPO", "crew")
     board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
-    issues = IssueClient(token, owner)
-    # Refinement reads the code it is deciding about. A Business Analyst that
-    # cannot see the product writes criteria against one it is imagining.
-    ws = Workspace(owner, repo, token, _bot_identity(token, identity))
+    sprint = board.schema.field("Sprint").current_iteration()
+    if not sprint:
+        console.print("[red]No iterations configured on the Sprint field.[/]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[dim]acting as {escape(identity)} · reviewing as {escape(review_identity)} · "
+        f"{'LANDING' if land else 'dry run'} · {escape(sprint)}[/]"
+    )
+
+    crew = loop.Crew(
+        board=board,
+        issues=IssueClient(token, owner),
+        sink=sink,
+        # Refinement reads the code it is deciding about, and delivery opens its
+        # worktrees off the same clone.
+        ws=Workspace(owner, repo, token, _bot_identity(token, identity)),
+        sandbox=sandbox,
+        rules=ProcessRules.from_config(org),
+        policy=EscalationPolicy.from_config(org),
+        ledger=EscalationLedger(VAR / "ledger" / "escalations.jsonl"),
+        org=org,
+        repo=repo,
+        repos=set(org.get("delivery", {}).get("repos") or [repo]),
+        sprint=sprint,
+        capacity=org["sprint"]["capacity_points"],
+        reviewer=IssueClient(review_token, owner),
+        reviewer_login=review_identity,
+    )
 
     with attach(sink, view):
-        result = run_tick(board, issues, sink, default_repo=repo, ws=ws)
+        result = loop.run(crew, dry_run=not land, max_passes=passes or loop.MAX_PASSES)
+
+    _render_tick(result, land=land)
+
+
+def _render_tick(result, *, land: bool) -> None:
+    """Report by phase. A Sponsor reading card-by-card is back in the work."""
+    from crew_org.flows import loop
 
     console.print()
-    if result.considered == 0:
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    table.add_column("phase")
+    table.add_column("")
+    table.add_column("detail", ratio=1)
+    for name, _run in loop.PHASES:
+        outcome = result.last(name)
+        if outcome is None:
+            continue
+        if outcome.error:
+            table.add_row(name, "[red]failed[/]", escape(outcome.error))
+        elif outcome.moved:
+            table.add_row(name, "[green]moved[/]", escape(outcome.summary))
+        else:
+            table.add_row(name, "[dim]quiet[/]", escape(outcome.summary))
+    console.print(table)
+
+    passes = f"{result.passes} pass" + ("es" if result.passes != 1 else "")
+    if result.failed:
         console.print(
-            "[dim]Nothing in Inbox (Goals). File a goal issue and add it to the board.[/]"
+            f"[yellow]{passes}, {len(result.failed)} phase failures.[/] The board moved as "
+            "far as the rest of the pass could take it."
         )
-    for number in result.proposed:
-        console.print(f"[green]proposed[/] epics on #{number}")
-    for number in result.epics_refined:
-        console.print(f"[green]refined[/]  #{number} into stories")
-    if result.design_required:
-        console.print(
-            f"[yellow]design required[/] on {', '.join(f'#{n}' for n in result.design_required)}"
-        )
-    for number, why in result.skipped:
-        console.print(f"[dim]skipped[/]  #{number} — {why}")
-    for number, why in result.failed:
-        console.print(f"[red]failed[/]   #{number} — {why}")
-    if result.stories_created:
-        console.print(
-            f"\n[bold]{len(result.stories_created)} stories are in Ready.[/] "
-            "Review them, or start a sprint when the backlog looks right."
-        )
-    elif result.proposed:
-        console.print(
-            "\n[bold]Read the proposals on the cards.[/] Nothing was moved — approve by "
-            "moving a card out of Inbox (Goals), or comment with changes."
-        )
+    elif not result.moved:
+        console.print(f"[dim]{passes} — the board is stable. Nothing could move.[/]")
+    else:
+        console.print(f"[green]{passes} — the board is stable.[/]")
+    if not land:
+        console.print("[dim]Dry run: nothing was merged, pushed or opened. Pass --land to act.[/]")
 
 
 def _synthetic_tick(sink: EventSink) -> None:
