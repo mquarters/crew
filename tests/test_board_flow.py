@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from crew_org.crews.refinement_crew import Epic, EpicProposal
 from crew_org.events import EventKind, EventSink
+from crew_org.flows import board_flow
 from crew_org.flows.board_flow import (
     EPIC_PROPOSAL_MARKER,
     INBOX,
@@ -177,7 +178,7 @@ def test_a_second_tick_does_not_propose_again(monkeypatch):
     issues = FakeIssues({1: EPIC_PROPOSAL_MARKER + " earlier proposal"})
     result, _ = run(FakeBoard([card(1)]), issues, monkeypatch)
     assert result.proposed == []
-    assert result.skipped == [(1, "already proposed")]
+    assert result.skipped == [(1, "already answered")]
     assert issues.posted == []
 
 
@@ -366,7 +367,7 @@ def test_a_second_tick_does_not_split_again(monkeypatch):
     issues = FakeIssues({3: STORY_SPLIT_MARKER})
     result = run_split(FakeBoard([epic_card(3)]), issues, monkeypatch)
     assert result.stories_created == []
-    assert (3, "already split") in result.skipped
+    assert (3, "already answered") in result.skipped
 
 
 def test_a_full_ready_column_holds_stories_in_refinement(monkeypatch):
@@ -432,7 +433,7 @@ def test_refinement_is_shown_the_code_it_is_deciding_about(monkeypatch, tmp_path
 
     shown = {}
 
-    def spy(title, context="", *, repository=""):
+    def spy(title, context="", *, repository="", feedback=""):
         shown["repository"] = repository
         return SPLIT
 
@@ -479,3 +480,104 @@ def test_a_repository_it_cannot_read_does_not_stop_refinement(monkeypatch):
 
     assert result.stories_created, "the split still happened"
     assert any("without its code" in e.summary for e in seen), "and it said so"
+
+
+# --- the Sponsor can send work back --------------------------------------
+
+
+class ReworkIssues(FakeIssues):
+    """Tracks what a rework closed and which label it dropped."""
+
+    def __init__(self, comments=None, children=None):
+        super().__init__()
+        self._comments = comments or []
+        self._children = children or []
+        self.closed: list[tuple[int, str]] = []
+        self.unlabelled: list[tuple[int, str]] = []
+
+    def comments(self, repo, number):
+        return self._comments
+
+    def sub_issues(self, repo, number):
+        return [{"number": n} for n in self._children]
+
+    def has_comment_marked(self, repo, number, marker):
+        return any(marker in (c.get("body") or "") for c in self._comments)
+
+    def close(self, repo, number, *, reason="completed"):
+        self.closed.append((number, reason))
+        return {}
+
+    def remove_label(self, repo, number, label):
+        self.unlabelled.append((number, label))
+
+
+def reworked(number: int) -> Card:
+    """A goal the Sponsor has sent back."""
+    return card(number).model_copy(update={"labels": frozenset({board_flow.NEEDS_REWORK})})
+
+
+def marked(marker):
+    return {"body": f"{marker}\nhere is what I proposed"}
+
+
+def sponsor(text):
+    return {"body": text}
+
+
+def test_an_answered_goal_is_left_alone(monkeypatch):
+    """Ticks are reconciliation passes; without this a goal accrues one
+    identical proposal per tick."""
+    issues = ReworkIssues(comments=[marked(board_flow.EPIC_PROPOSAL_MARKER)])
+    result, _ = run(FakeBoard([card(1)]), issues, monkeypatch)
+
+    assert result.skipped == [(1, "already answered")]
+    assert result.proposed == []
+
+
+def test_a_goal_sent_back_is_proposed_again(monkeypatch):
+    """Rejection taught the crew nothing: the same goal decomposed again
+    produced the same epics, because nothing about the rejection was an input."""
+    issues = ReworkIssues(
+        comments=[marked(board_flow.EPIC_PROPOSAL_MARKER), sponsor("I only want one epic")],
+    )
+    sent = {}
+
+    def spy(goal, **kw):
+        sent["feedback"] = kw.get("feedback", "")
+        return PROPOSAL
+
+    result, _ = run(FakeBoard([reworked(1)]), issues, monkeypatch, proposer=spy)
+
+    assert result.proposed == [1]
+    assert "I only want one epic" in sent["feedback"]
+    assert "here is what I proposed" not in sent["feedback"], "not the crew's own words back"
+
+
+def test_a_rework_supersedes_the_cards_it_replaces(monkeypatch):
+    """A re-run added cards beside the old ones rather than replacing them."""
+    issues = ReworkIssues(
+        comments=[marked(board_flow.EPIC_PROPOSAL_MARKER), sponsor("try again")],
+        children=[7, 8],
+    )
+    board = FakeBoard([reworked(1), card(7, status=INBOX), card(8, status=INBOX)])
+    run(board, issues, monkeypatch)
+
+    assert sorted(issues.closed) == [(7, "not_planned"), (8, "not_planned")]
+    assert (1, board_flow.NEEDS_REWORK) in issues.unlabelled, "and the label is spent"
+
+
+def test_a_rework_that_would_throw_away_work_is_refused(monkeypatch):
+    """Replacing a decomposition while its stories are being built would discard
+    work in flight. That is a decision for the person asking."""
+    issues = ReworkIssues(
+        comments=[marked(board_flow.EPIC_PROPOSAL_MARKER), sponsor("try again")],
+        children=[7],
+    )
+    board = FakeBoard([reworked(1), card(7, status="In Progress")])
+    result, _ = run(board, issues, monkeypatch)
+
+    assert result.proposed == []
+    assert issues.closed == [], "nothing thrown away"
+    assert any("rework refused" in why for _, why in result.skipped)
+    assert any("#7" in why for _, why in result.skipped), "and it names the card"

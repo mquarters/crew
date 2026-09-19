@@ -140,7 +140,15 @@ class StoryProposal(BaseModel):
         return value
 
 
-def propose_epics(goal: str, *, repository: str = "") -> EpicProposal:
+REWORK = (
+    "\n\n## The Sponsor sent your last answer back\n\n"
+    "{feedback}\n\n"
+    "This replaces what you proposed before; the cards from it have been closed. "
+    "Answer the objection rather than repeating yourself.\n"
+)
+
+
+def propose_epics(goal: str, *, repository: str = "", feedback: str = "") -> EpicProposal:
     """Product Owner only: a goal becomes a set of epics.
 
     `repository` is the code the goal is about. A role deciding what should
@@ -149,10 +157,13 @@ def propose_epics(goal: str, *, repository: str = "") -> EpicProposal:
     """
     agents = build_agents("product_owner")
     repo_block = f"## The repository as it stands\n\n{repository}\n\n" if repository else ""
+    sent_back = REWORK.format(feedback=feedback) if feedback else ""
     task = Task(
         description=(
-            repo_block + f"The Product Sponsor has set this goal:\n\n{goal}\n\n"
-            f"Propose between {MIN_EPICS} and {MAX_EPICS} epics that together deliver it. "
+            repo_block
+            + f"The Product Sponsor has set this goal:\n\n{goal}\n\n"
+            + sent_back
+            + f"Propose between {MIN_EPICS} and {MAX_EPICS} epics that together deliver it. "
             "Decompose by outcome, never by architectural layer. "
             "Order them so the most valuable is deliverable first.\n\n"
             "For each epic, state what a user could do with that epic alone, without "
@@ -169,7 +180,9 @@ def propose_epics(goal: str, *, repository: str = "") -> EpicProposal:
     return crew.kickoff().pydantic
 
 
-def split_epic(title: str, context: str = "", *, repository: str = "") -> StoryProposal:
+def split_epic(
+    title: str, context: str = "", *, repository: str = "", feedback: str = ""
+) -> StoryProposal:
     """Business Analyst only: an epic becomes INVEST-sized stories.
 
     Takes the epic's title and whatever context the card carries, rather than an
@@ -182,9 +195,10 @@ def split_epic(title: str, context: str = "", *, repository: str = "") -> StoryP
     # Stable first: the repository is identical between every split in a pass,
     # where the epic is not, so it goes ahead of it and the cached prefix holds.
     repo_block = f"## The repository as it stands\n\n{repository}\n\n" if repository else ""
+    sent_back = REWORK.format(feedback=feedback) if feedback else ""
     task = Task(
         description=(
-            repo_block + "Split this epic into stories.\n\n"
+            repo_block + sent_back + "Split this epic into stories.\n\n"
             f"Epic: {title}\n\n{context}\n\n"
             "Each story must satisfy INVEST and carry acceptance criteria a test can be "
             "written from directly. Split by workflow step, by business rule, or by "

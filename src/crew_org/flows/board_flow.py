@@ -49,6 +49,10 @@ GOAL_TYPE = "Goal"
 EPIC_TYPE = "Epic"
 STORY_TYPE = "Story"
 NEEDS_HUMAN = "needs:human"
+# The Sponsor's only verb beyond approve and reject. Without it a rejection
+# teaches the crew nothing: the same goal decomposed again produces the same
+# epics, because nothing about the rejection is an input to anything.
+NEEDS_REWORK = "needs:rework"
 NEEDS_DESIGN = "needs:design"
 
 
@@ -138,6 +142,111 @@ def render_proposal(
         "sits with the epics.",
     ]
     return "\n".join(lines)
+
+
+def sponsor_notes(issues: IssueClient, repo: str, number: int) -> str:
+    """What a person has said on this card since the crew last answered it.
+
+    Only comments after the crew's own last marked comment, so a rework reads
+    the objection to the proposal it is replacing rather than the whole history
+    of the card. Comments carrying a crew marker are the crew's own and are
+    skipped: a role reading its own last output back as instruction is noise.
+    """
+    try:
+        comments = issues.comments(repo, number)
+    except Exception:  # noqa: BLE001
+        return ""
+
+    markers = (EPIC_PROPOSAL_MARKER, STORY_SPLIT_MARKER, "<!-- crew:")
+    last_crew = -1
+    for i, c in enumerate(comments):
+        if any(m in (c.get("body") or "") for m in markers):
+            last_crew = i
+    since = comments[last_crew + 1 :]
+    return "\n\n".join(
+        (c.get("body") or "").strip()
+        for c in since
+        if not any(m in (c.get("body") or "") for m in markers)
+    ).strip()
+
+
+def unstarted_children(issues: IssueClient, cards: list[Card], repo: str, number: int):
+    """(closable, started) — the cards a rework would supersede, and those it
+    must not.
+
+    Replacing a decomposition while its stories are being built would throw away
+    work in flight. A rework that would do that is refused instead, naming the
+    cards, because that is a decision for the person asking.
+    """
+    by_number = {c.number: c for c in cards}
+    try:
+        children = [child["number"] for child in issues.sub_issues(repo, number)]
+    except Exception:  # noqa: BLE001
+        return [], []
+
+    closable, started = [], []
+    for child in children:
+        card = by_number.get(child)
+        if card is None or card.state == "CLOSED":
+            continue
+        (started if card.status not in (INBOX, REFINEMENT, READY) else closable).append(child)
+    return closable, started
+
+
+def rework_gate(
+    issues: IssueClient,
+    sink: EventSink,
+    result: TickResult,
+    cards: list[Card],
+    card: Card,
+    repo: str,
+    marker: str,
+) -> tuple[bool, str]:
+    """(proceed, what the Sponsor said).
+
+    Three things stopped a decomposition being redone, and only the first is
+    the obvious one: the marker made the step one-shot, nothing read comments as
+    input, and a re-run added cards beside the old ones rather than replacing
+    them.
+    """
+    number = card.number or 0
+    answered = issues.has_comment_marked(repo, number, marker)
+    wants_rework = NEEDS_REWORK in card.labels
+
+    if answered and not wants_rework:
+        result.skipped.append((number, "already answered"))
+        sink.emit(CrewEvent(kind=EventKind.NOTE, card=number, summary="already answered"))
+        return False, ""
+    if not wants_rework:
+        return True, ""
+
+    closable, started = unstarted_children(issues, cards, repo, number)
+    if started:
+        why = "work already started on " + ", ".join(f"#{n}" for n in started)
+        result.skipped.append((number, f"rework refused — {why}"))
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.NOTE,
+                card=number,
+                summary=f"rework refused — {why}"[:100],
+            )
+        )
+        return False, ""
+
+    for child in closable:
+        with contextlib.suppress(Exception):
+            issues.close(repo, child, reason="not_planned")
+    if closable:
+        sink.emit(
+            CrewEvent(
+                kind=EventKind.NOTE,
+                card=number,
+                summary=f"superseded {', '.join(f'#{n}' for n in closable)}"[:100],
+            )
+        )
+    with contextlib.suppress(Exception):
+        issues.remove_label(repo, number, NEEDS_REWORK)
+    return True, sponsor_notes(issues, repo, number)
 
 
 def goal_cards(cards: list[Card]) -> list[Card]:
@@ -327,8 +436,10 @@ def refine_epics(
         number = epic_card.number
         assert number is not None
 
-        if issues.has_comment_marked(repo, number, STORY_SPLIT_MARKER):
-            result.skipped.append((number, "already split"))
+        proceed, notes = rework_gate(
+            issues, sink, result, cards, epic_card, repo, STORY_SPLIT_MARKER
+        )
+        if not proceed:
             continue
 
         sink.emit(
@@ -348,6 +459,7 @@ def refine_epics(
                 epic_card.title,
                 _goal_body(issues, repo, number),
                 repository=context.for_repo(repo),
+                feedback=notes,
             )
         except Exception as exc:  # noqa: BLE001
             result.failed.append((number, f"{type(exc).__name__}: {exc}"))
@@ -478,11 +590,8 @@ def tick(
         number = card.number
         assert number is not None
 
-        if issues.has_comment_marked(repo, number, EPIC_PROPOSAL_MARKER):
-            result.skipped.append((number, "already proposed"))
-            sink.emit(
-                CrewEvent(kind=EventKind.NOTE, card=number, summary="already proposed — skipping")
-            )
+        proceed, notes = rework_gate(issues, sink, result, cards, card, repo, EPIC_PROPOSAL_MARKER)
+        if not proceed:
             continue
 
         sink.emit(
@@ -505,6 +614,7 @@ def tick(
             proposal = propose_epics(
                 f"{card.title}\n\n{_goal_body(issues, repo, number)}",
                 repository=context.for_repo(repo),
+                feedback=notes,
             )
         except Exception as exc:  # noqa: BLE001
             result.failed.append((number, f"{type(exc).__name__}: {exc}"))
