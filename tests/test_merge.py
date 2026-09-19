@@ -86,6 +86,15 @@ def test_only_stories_that_passed_qa_are_landed():
     assert [c.number for c in ready_to_land(cards)] == [6]
 
 
+def test_the_merge_queue_is_ordered_by_the_analyst():
+    """This was a bare comprehension over whatever order the board returned.
+    Three pull requests from one epic, all touching the same file, merged out
+    of order conflicts the remainder — which blocks those cards and labels them
+    for a person, turning an ordering accident into work for a human."""
+    cards = [card(32), card(30), card(31)]
+    assert [c.number for c in ready_to_land(cards)] == [30, 31, 32]
+
+
 def test_repositories_outside_the_allow_list_are_left_alone():
     cards = [card(6), card(20, repo="crew")]
     assert [c.number for c in ready_to_land(cards, {"sprint-metrics"})] == [6]

@@ -583,6 +583,8 @@ def deliver(
         console.print(f"[yellow]#{number}[/] not merged — PR #{pull} has no approving review")
     for number, why in result.unmergeable:
         console.print(f"[red]#{number}[/] not merged — {why}")
+    for number, blocker in result.waiting_on_a_sibling:
+        console.print(f"[dim]#{number}[/] waits for #{blocker} in the same epic")
     for outcome in result.delivered:
         if outcome.landed:
             console.print(f"[green]#{outcome.card}[/] → PR #{outcome.pr} on `{outcome.branch}`")
