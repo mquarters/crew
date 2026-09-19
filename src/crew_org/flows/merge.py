@@ -37,15 +37,25 @@ class MergeResult:
 
 
 def ready_to_land(cards: list[Card], repos: set[str] | None = None) -> list[Card]:
-    """Stories that have passed QA and are waiting for the Sponsor."""
-    return [
-        c
-        for c in cards
-        if c.status == MERGING
-        and c.work_type == STORY_TYPE
-        and c.state != "CLOSED"
-        and (repos is None or c.repo in repos)
-    ]
+    """Stories that have passed QA and are waiting to land, oldest card first.
+
+    Sorted, because this was a bare comprehension over whatever order the board
+    returned. Card number ascends in the order the Business Analyst proposed the
+    stories, so sorting by it is sorting by the order they were meant to be
+    built — and merging siblings out of that order conflicts the remainder,
+    which blocks those cards and labels them for a person.
+    """
+    return sorted(
+        (
+            c
+            for c in cards
+            if c.status == MERGING
+            and c.work_type == STORY_TYPE
+            and c.state != "CLOSED"
+            and (repos is None or c.repo in repos)
+        ),
+        key=lambda c: c.number or 0,
+    )
 
 
 def merge_approved(

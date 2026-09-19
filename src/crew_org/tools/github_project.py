@@ -95,6 +95,10 @@ class Card(BaseModel):
     work_type: str | None = None
     priority: str | None = None
     owner_agent: str | None = None
+    # The epic this story was split from, read straight off the item query
+    # rather than by asking each epic for its children. Sibling order is what
+    # decides whether a story may be claimed yet.
+    parent: int | None = None
     sprint: str | None = None
     points: float | None = None
     escalations: float | None = None
@@ -155,6 +159,7 @@ query($owner: String!, $number: Int!, $cursor: String) {
               number title url state
               repository { name }
               labels(first: 20) { nodes { name } }
+              parent { number }
             }
           }
         }
@@ -388,6 +393,7 @@ def _to_card(node: dict[str, Any]) -> Card | None:
         url=content.get("url"),
         repo=(content.get("repository") or {}).get("name"),
         state=content.get("state"),
+        parent=(content.get("parent") or {}).get("number"),
         labels=frozenset(
             label["name"] for label in (content.get("labels") or {}).get("nodes") or []
         ),

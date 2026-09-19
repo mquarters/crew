@@ -607,6 +607,66 @@ def test_a_dry_run_does_not_merge(harness):
     assert ("S6", "Done") not in board.moves
 
 
+# --- one story at a time within an epic ----------------------------------
+
+
+def sibling(number: int, *, parent: int = 100, status: str = "Sprint Backlog"):
+    return story(number).model_copy(update={"parent": parent, "status": status})
+
+
+def test_a_story_waits_for_its_earlier_sibling(harness):
+    """sprint-metrics #31 created scrape.py with an HTTP server on it; #32,
+    whose story was "handle unavailable data at the scrape endpoint", was
+    claimed 100 seconds later, could not see scrape.py, and built a second
+    server in another module. Both passed their own tests."""
+    result, board, _, _, _, _ = harness(checks=[green()], cards=[sibling(6), sibling(7)])
+
+    assert [n for n, _ in result.waiting_on_a_sibling] == [7]
+    assert result.waiting_on_a_sibling[0][1] == 6, "and it says which story it waits for"
+    assert ("S7", "In Progress") not in board.moves
+
+
+def test_a_landed_sibling_does_not_hold_anything(harness):
+    """Landed means Done or closed — an open pull request is not in anyone's
+    base, but a merged one is."""
+    done = sibling(6, status="Done")
+    result, board, _, _, _, _ = harness(checks=[green()], cards=[done, sibling(7)])
+
+    assert result.waiting_on_a_sibling == []
+    assert ("S7", "In Progress") in board.moves
+
+
+def test_stories_from_different_epics_run_side_by_side(harness):
+    """Epics are decomposed by outcome precisely so they do not touch the same
+    code. That concurrency is the point and stays."""
+    result, board, _, _, _, _ = harness(
+        checks=[green(), green()], cards=[sibling(6, parent=100), sibling(7, parent=200)]
+    )
+
+    assert result.waiting_on_a_sibling == []
+    assert len([m for m in board.moves if m[1] == "In Progress"]) == 2
+
+
+def test_a_story_with_no_epic_is_not_held(harness):
+    """A card filed by hand has no parent and nothing to wait for."""
+    orphan = story(7).model_copy(update={"parent": None})
+    result, _, _, _, _, _ = harness(checks=[green()], cards=[orphan])
+
+    assert result.waiting_on_a_sibling == []
+    assert len(result.delivered) == 1
+
+
+def test_the_limit_counts_claims_not_candidates(harness):
+    """A held story is not an attempt. Counting it against --limit would mean a
+    tick that claimed nothing because the first candidate was waiting."""
+    result, board, _, _, _, _ = harness(
+        checks=[green()], cards=[sibling(6, parent=100), sibling(7, parent=100)], limit=1
+    )
+
+    assert len(result.delivered) == 1
+    assert result.delivered[0].card == 6
+
+
 # --- attribution ---------------------------------------------------------
 
 

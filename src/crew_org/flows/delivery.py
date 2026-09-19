@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from crew_org.columns import BLOCKED, IN_PROGRESS, REVIEWING, SPRINT_BACKLOG
+from crew_org.columns import BLOCKED, DONE, IN_PROGRESS, REVIEWING, SPRINT_BACKLOG
 from crew_org.crews.delivery_crew import Implementation, implement_story
 from crew_org.escalation import (
     Disposition,
@@ -95,6 +95,9 @@ class DeliveryResult:
     # What a real run would have merged. A dry run must not merge, and must
     # still say what it declined to do.
     would_land: list[int] = field(default_factory=list)
+    # (story, the earlier sibling it is waiting for). Reported rather than
+    # silently skipped: a card that could be claimed and was not needs a reason.
+    waiting_on_a_sibling: list[tuple[int, int]] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -174,6 +177,37 @@ def sprint_stories(cards: list[Card], sprint: str, *, repos: set[str] | None = N
         ),
         key=lambda c: c.number or 0,
     )
+
+
+def held_by_a_sibling(cards: list[Card], story: Card) -> Card | None:
+    """The earlier story in this story's epic that has not landed yet.
+
+    Stories in one epic extend each other. `In Progress` has a WIP limit of 3,
+    so without this the crew claims three siblings at once, each branching from
+    a default branch that does not yet contain the others.
+
+    sprint-metrics #31 created `scrape.py` with an HTTP server on it; #32, whose
+    story was "handle unavailable data **at the scrape endpoint**", was claimed
+    100 seconds later, could not see `scrape.py`, and built a second server in
+    another module. Both passed their own tests.
+
+    Earlier means lower card number, which is the order the Business Analyst
+    proposed the stories: `refine_epics` creates their issues in that order, so
+    the numbers ascend in it. Landed means Done or closed — an open pull request
+    is not in anyone's base.
+    """
+    if story.parent is None:
+        return None
+    blockers = [
+        c
+        for c in cards
+        if c.parent == story.parent
+        and c.work_type == STORY_TYPE
+        and (c.number or 0) < (story.number or 0)
+        and c.state != "CLOSED"
+        and c.status != DONE
+    ]
+    return min(blockers, key=lambda c: c.number or 0) if blockers else None
 
 
 def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
@@ -574,9 +608,20 @@ def deliver(
                 + ", ".join(f"#{c.number} ({c.repo})" for c in skipped),
             )
 
-    for index, card in enumerate(sprint_stories(cards, sprint, repos=repos)):
-        if limit is not None and index >= limit:
+    claimed = 0
+    for card in sprint_stories(cards, sprint, repos=repos):
+        if limit is not None and claimed >= limit:
             break
+
+        blocker = held_by_a_sibling(cards, card)
+        if blocker is not None:
+            result.waiting_on_a_sibling.append((card.number or 0, blocker.number or 0))
+            sink.note(
+                EventKind.NOTE,
+                f"#{card.number} waits for #{blocker.number} in the same epic",
+            )
+            continue
+
         verdict = rules.may_move(frm=SPRINT_BACKLOG, to=IN_PROGRESS, counts=counts)
         if not verdict.allowed:
             sink.note(EventKind.NOTE, verdict.reason)
@@ -593,6 +638,7 @@ def deliver(
             summary=card.title[:60],
         )
         counts[IN_PROGRESS] = counts.get(IN_PROGRESS, 0) + 1
+        claimed += 1
 
         # The card names its own repository. Using a global default would
         # implement a card belonging to one repo inside another, silently.
