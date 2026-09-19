@@ -103,6 +103,26 @@ class Implementation(BaseModel):
         return self
 
 
+# Identical for every story and every repair, so it is the cacheable prefix.
+STANDING_INSTRUCTIONS = (
+    "Implement one story.\n\n"
+    "Write the test that expresses each acceptance criterion, then the code that "
+    "satisfies it. Return every file you create or change, in full — content is "
+    "written verbatim, so partial files destroy the original.\n"
+    "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
+    "Do not change lint or tool configuration: a stricter rule you add is a rule you "
+    "then have to satisfy, and that is not what the story asked for.\n"
+    "Where a file already exists, keep every existing definition byte for byte — same "
+    "name, same signature, same body — and add alongside it. Other stories depend on "
+    "that code.\n"
+    "If extending the story genuinely requires changing something that is already "
+    "there, list its name in `modifies`. That makes the change deliberate and "
+    "reviewable. Anything changed without being declared is rejected.\n"
+    "Implement only this story. Metrics belonging to other stories are not yours to "
+    "add, even when they look adjacent."
+)
+
+
 def implement_story(story: str, *, context: str, feedback: str = "") -> Implementation:
     """Produce the files that satisfy one story.
 
@@ -120,26 +140,17 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
         if feedback
         else ""
     )
+    # Ordered stable-first. Prefix caching matches a common prefix, so anything
+    # after the first varying block re-tokenises every call. These standing
+    # instructions are identical for every story and every repair, so they go
+    # first; the story varies per card, the repository per attempt, and the
+    # failure most of all. Measured cache hit rate before reordering: 31%.
     task = Task(
         description=(
-            f"Implement this story.\n\n{story}\n\n"
-            f"## The repository as it stands\n\n{context}\n\n"
-            "Write the test that expresses each acceptance criterion, then the code "
-            "that satisfies it. Return every file you create or change, in full — "
-            "content is written verbatim, so partial files destroy the original.\n"
-            "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
-            "Do not change lint or tool configuration: a stricter rule you add is a "
-            "rule you then have to satisfy, and that is not what the story asked for.\n"
-            "Where a file already exists, keep every existing definition byte for byte "
-            "— same name, same signature, same body — and add alongside it. Other "
-            "stories depend on that code.\n"
-            "If extending the story genuinely requires changing something that is "
-            "already there, list its name in `modifies`. That makes the change "
-            "deliberate and reviewable. Anything changed without being declared is "
-            "rejected.\n"
-            "Implement only this story. Metrics belonging to other stories are not "
-            "yours to add, even when they look adjacent."
-            f"{repair}"
+            STANDING_INSTRUCTIONS
+            + f"\n\n## The story\n\n{story}\n\n"
+            + f"## The repository as it stands\n\n{context}\n"
+            + repair
         ),
         expected_output="A summary and the complete contents of every file to write.",
         agent=agents["developer"],
