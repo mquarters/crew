@@ -41,10 +41,16 @@ STORY_TYPE = "Story"
 
 # Files worth showing the Developer so it writes code that fits in.
 CONTEXT_FILES = ("pyproject.toml", "README.md")
-MAX_CONTEXT_FILES = 40
-# Source and tests are shown in full on a repair, bounded so a large tree does
-# not crowd out the failure itself.
-MAX_SOURCE_CHARS = 20_000
+# The whole repository, on every attempt. The window is 262,144 tokens and the
+# pilot repo is 17,195 characters — under 2% of it. Showing a developer the
+# names of three functions and asking it to honour behaviour it has never read
+# is not a context budget, it is a blindfold, and every rule since #8 has been
+# an attempt to describe in prose what one `cat` would have shown.
+#
+# The ceiling is a guard against a tree that genuinely does not fit, not a
+# budget. It drops whole files and names them: a file cut mid-function is worse
+# than a file left out, because nothing in it marks where it stopped.
+CONTEXT_CHAR_CEILING = 200_000
 # Tool droppings. They tell the Developer nothing and they are not free: the
 # file listing is capped, so eleven cache entries are eleven real files the
 # model never gets shown.
@@ -192,7 +198,7 @@ def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
     ]
 
 
-def repository_context(worktree: Path, *, include_source: bool = False) -> str:
+def repository_context(worktree: Path) -> str:
     """What the repository looks like, and what each file defines.
 
     Editing works by name, so the names are the context that matters. Listing
@@ -208,8 +214,14 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
     rule nobody had told it. Signatures cost a few tokens more and are just as
     stable between attempts, so the cacheable prefix is unaffected.
 
-    `include_source` adds the bodies on a repair, where seeing the actual code
-    is worth the churn.
+    The bodies follow, in full, on every attempt. They used to appear only on a
+    repair, on a prefix-cache argument: bodies churn between attempts where
+    names do not. That optimised the wrong thing. Story #11 rewrote `main` —
+    dropped its return type, its docstring and its stdin default — and was
+    refused for breaking a contract that lives in a body it had never been
+    shown. The signature line it did get, `main(argv: Sequence[str] | None =
+    None) -> int`, carries none of that. Cache hits are cheaper than a story
+    that never lands.
     """
     from crew_org.tools.regression import signatures_for_context  # noqa: PLC0415
 
@@ -218,7 +230,7 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
     )
 
     lines = ["### Files and what they define", ""]
-    for path in paths[:MAX_CONTEXT_FILES]:
+    for path in paths:
         rel = path.relative_to(worktree)
         if path.suffix == ".py":
             signatures = signatures_for_context(path.read_text(encoding="utf-8", errors="ignore"))
@@ -230,8 +242,6 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
             lines.append(f"- `{rel}` — {defined}")
         else:
             lines.append(f"- `{rel}`")
-    if len(paths) > MAX_CONTEXT_FILES:
-        lines.append(f"- … and {len(paths) - MAX_CONTEXT_FILES} more")
 
     lines += [
         "",
@@ -249,17 +259,28 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
     for name in CONTEXT_FILES:
         target = worktree / name
         if target.exists():
-            lines += ["", f"### {name}", "", "```", target.read_text()[:2000].strip(), "```"]
+            lines += ["", f"### {name}", "", "```", target.read_text().strip(), "```"]
 
-    if include_source:
-        lines += ["", "### Current source", ""]
-        budget = MAX_SOURCE_CHARS
-        for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
-            if ".venv" in target.parts or budget <= 0:
-                continue
-            body = target.read_text()[:budget]
-            budget -= len(body)
-            lines += [f"`{target.relative_to(worktree)}`", "", "```python", body.strip(), "```", ""]
+    lines += ["", "### Current source", ""]
+    budget = CONTEXT_CHAR_CEILING
+    omitted: list[str] = []
+    for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
+        if IGNORED_DIRS & set(target.parts):
+            continue
+        rel = target.relative_to(worktree)
+        body = target.read_text(encoding="utf-8", errors="ignore")
+        if len(body) > budget:
+            omitted.append(str(rel))
+            continue
+        budget -= len(body)
+        lines += [f"`{rel}`", "", "```python", body.strip(), "```", ""]
+    if omitted:
+        lines += [
+            "These files exist and are not shown, because the tree did not fit: "
+            + ", ".join(f"`{name}`" for name in omitted)
+            + ". Treat anything they define as code you cannot see.",
+            "",
+        ]
 
     return "\n".join(lines)
 
@@ -313,7 +334,7 @@ def deliver_story(
     while True:
         # Recomputed every pass: a repair must see the files it just wrote, or
         # it is fixing code it cannot read.
-        context = repository_context(worktree, include_source=bool(feedback))
+        context = repository_context(worktree)
         try:
             implementation = implement_story(story_text, context=context, feedback=feedback)
         except Exception as exc:  # noqa: BLE001
