@@ -157,6 +157,11 @@ def _render_tick(result, *, land: bool) -> None:
             f"[yellow]{passes}, {len(result.failed)} phase failures.[/] The board moved as "
             "far as the rest of the pass could take it."
         )
+    elif not result.settled:
+        console.print(
+            f"[yellow]{passes} — stopped at the pass cap, not settled.[/] "
+            "Something is still moving; run again, or raise --passes."
+        )
     elif not result.moved:
         console.print(f"[dim]{passes} — the board is stable. Nothing could move.[/]")
     else:

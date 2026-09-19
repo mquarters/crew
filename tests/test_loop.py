@@ -76,13 +76,20 @@ def test_it_keeps_going_while_anything_moves(crew, monkeypatch):
 
 def test_a_pass_that_moves_nothing_ends_the_tick(crew, monkeypatch):
     phases(monkeypatch, ("refine", False))
-    assert loop.run(crew).passes == 1
+    result = loop.run(crew)
+
+    assert result.passes == 1
+    assert result.settled is True
 
 
 def test_a_board_that_will_not_settle_is_capped(crew, monkeypatch):
     """A pass that keeps moving forever is a bug, not a busy board."""
     phases(monkeypatch, ("refine", True))
-    assert loop.run(crew, max_passes=3).passes == 3
+    result = loop.run(crew, max_passes=3)
+
+    assert result.passes == 3
+    assert result.settled is False, "stopped, not stable — saying otherwise tells the "
+    "Sponsor the work is finished"
 
 
 def test_a_failing_phase_does_not_abort_the_pass(crew, monkeypatch):

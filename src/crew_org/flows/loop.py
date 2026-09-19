@@ -75,6 +75,10 @@ class PhaseOutcome:
 class LoopResult:
     passes: int = 0
     outcomes: list[PhaseOutcome] = field(default_factory=list)
+    # True only when a pass moved nothing. Hitting the cap is not the same as
+    # the board being stable, and reporting it as such tells the Sponsor the
+    # work is finished when it was merely stopped.
+    settled: bool = False
 
     @property
     def failed(self) -> list[PhaseOutcome]:
@@ -250,11 +254,13 @@ def run(crew: Crew, *, dry_run: bool = True, max_passes: int = MAX_PASSES) -> Lo
             moved_this_pass = moved_this_pass or outcome.moved
 
         if not moved_this_pass:
+            result.settled = True
             break
 
     crew.sink.note(
         EventKind.TICK_FINISHED,
         f"{result.passes} pass{'es' if result.passes != 1 else ''}, "
-        f"{len(result.moved)} phases moved, {len(result.failed)} failed",
+        f"{'stable' if result.settled else 'stopped at the pass cap'}, "
+        f"{len(result.failed)} failed",
     )
     return result
