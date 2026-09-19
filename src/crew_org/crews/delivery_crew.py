@@ -122,8 +122,25 @@ class Implementation(BaseModel):
             raise ValueError("an implementation must create a file or edit one")
         return self
 
+
+class FirstAttempt(Implementation):
+    """An implementation written from the story, with nothing yet on disk.
+
+    The test requirement lives here rather than on `Implementation` because a
+    repair cannot satisfy it and should not have to. A repair is told to return
+    only the edits that fix the failure, and the test its first attempt wrote is
+    already in the worktree and usually already correct — so demanding a test in
+    every submission asks the model to choose which instruction to disobey.
+    Story #11 chose correctly, returned the fix alone, and was rejected for it
+    twice.
+
+    Nothing is lost by scoping it: QA reads the worktree and will not accept a
+    story until it can name the test that proves each criterion, which is a
+    claim the schema could never check anyway.
+    """
+
     @model_validator(mode="after")
-    def _has_a_test(self) -> Implementation:
+    def _has_a_test(self) -> FirstAttempt:
         """Definition of Done §7.1: every acceptance criterion needs a test.
 
         Satisfied by a new test file or by adding to an existing one — a story
@@ -206,7 +223,7 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
             "A summary, plus the new files and the named edits that implement the story."
         ),
         agent=agents["developer"],
-        output_pydantic=Implementation,
+        output_pydantic=Implementation if feedback else FirstAttempt,
     )
     crew = Crew(
         agents=list(agents.values()), tasks=[task], process=Process.sequential, verbose=False

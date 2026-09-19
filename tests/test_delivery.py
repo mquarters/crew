@@ -6,7 +6,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from crew_org.crews.delivery_crew import MAX_FILE_BYTES, FileWrite, Implementation
+from crew_org.crews.delivery_crew import (
+    MAX_FILE_BYTES,
+    FileWrite,
+    FirstAttempt,
+    Implementation,
+)
 
 
 def code(path: str = "src/pkg/mod.py") -> FileWrite:
@@ -74,21 +79,38 @@ def test_an_enormous_file_is_refused():
 # --- Definition of Done --------------------------------------------------
 
 
-def test_an_implementation_without_a_test_is_refused():
+def test_a_first_attempt_without_a_test_is_refused():
     """DoD §7.1 enforced as a schema rule, so it is a SCHEMA failure the repair
     loop handles rather than something a reviewer catches later."""
     with pytest.raises(ValidationError, match="no test"):
-        Implementation(summary="s", new_files=[code()])
+        FirstAttempt(summary="s", new_files=[code()])
 
 
-def test_an_implementation_with_a_test_is_accepted():
-    impl = Implementation(summary="s", new_files=[code(), a_test()])
+def test_a_first_attempt_with_a_test_is_accepted():
+    impl = FirstAttempt(summary="s", new_files=[code(), a_test()])
     assert len(impl.new_files) == 2
 
 
 @pytest.mark.parametrize("name", ["tests/test_mod.py", "src/pkg/mod_test.py"])
 def test_both_test_naming_conventions_count(name):
-    assert Implementation(summary="s", new_files=[code(), a_test(name)]).new_files
+    assert FirstAttempt(summary="s", new_files=[code(), a_test(name)]).new_files
+
+
+def test_a_repair_may_return_the_fix_alone():
+    """A repair is told to return only the edits that fix the failure, and the
+    test it wrote first time is already in the worktree. Requiring a test in
+    every submission asks it to choose which instruction to disobey — story #11
+    chose correctly, returned the fix alone, and was rejected for it twice.
+
+    QA is the real guard here: it reads the worktree and will not accept a story
+    until it can name the test proving each criterion."""
+    impl = Implementation(summary="fix main()", new_files=[code()])
+    assert impl.new_files
+
+
+def test_a_repair_still_has_to_do_something():
+    with pytest.raises(ValidationError, match="create a file or edit one"):
+        Implementation(summary="nothing to do")
 
 
 def test_an_empty_implementation_is_refused():
