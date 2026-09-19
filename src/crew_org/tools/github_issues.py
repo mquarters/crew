@@ -146,6 +146,15 @@ class IssueClient:
         response.raise_for_status()
         return response.json()
 
+    def close(self, repo: str, number: int, *, reason: str = "completed") -> dict[str, Any]:
+        """Close an issue. `reason` is "completed" or "not_planned"."""
+        return self._request(
+            "PATCH",
+            f"/repos/{self.owner}/{repo}/issues/{number}",
+            state="closed",
+            state_reason=reason,
+        )
+
     def add_labels(self, repo: str, number: int, labels: list[str]) -> None:
         self._request("POST", f"/repos/{self.owner}/{repo}/issues/{number}/labels", labels=labels)
 
