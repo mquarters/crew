@@ -442,11 +442,18 @@ def tick(
     org: dict | None = None,
     ws: Workspace | None = None,
 ) -> TickResult:
-    """Run one reconciliation pass, to quiescence.
+    """The refinement phase: goals become epics, approved epics become stories.
 
-    Two passes, in dependency order: goals become epics awaiting the Sponsor,
-    and epics the Sponsor has approved become stories. Neither moves work into
-    a sprint — that is still the Sponsor's decision.
+    Two passes, in dependency order. It stops at Ready because that is where
+    refinement ends, not because a Sponsor is waiting: section 1 of the
+    constitution names exactly two human gates — epics in `Inbox (Goals)` and
+    the sprint review — and admission is neither. `crew_org.flows.loop` runs the
+    phase that follows.
+
+    This used to claim sprint admission was "still the Sponsor's decision",
+    which invented a third gate the constitution does not have and `crew sprint
+    start` explicitly denies: "approving an epic was the scope decision, so
+    this is mechanical". Work sat in Ready looking like it needed a human.
     """
     org = org or load_org()
     rules = ProcessRules.from_config(org)
