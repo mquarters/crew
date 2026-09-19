@@ -54,8 +54,20 @@ class DeliveryOutcome:
     pr: int | None = None
     blocked_reason: str | None = None
     attempts: int = 0
+    # Counted per failure class: a mechanical mistake like naming a definition
+    # that does not exist should not spend the budget kept for real failures.
+    # Observed on story #8, where two invented names left the first genuine test
+    # failure with no repair left and it escalated immediately.
+    attempts_by_class: dict[str, int] = field(default_factory=dict)
     escalated: bool = False
     diff: str | None = None
+
+    def seen(self, failure_class: str) -> int:
+        return self.attempts_by_class.get(failure_class, 0)
+
+    def count(self, failure_class: str) -> None:
+        self.attempts_by_class[failure_class] = self.seen(failure_class) + 1
+        self.attempts += 1
 
     @property
     def ok(self) -> bool:
@@ -168,35 +180,54 @@ def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
 
 
 def repository_context(worktree: Path, *, include_source: bool = False) -> str:
-    """What the repository looks like, so the Developer writes code that fits.
+    """What the repository looks like, and what each file defines.
 
-    On a repair, `include_source` shows the current contents of src/ and tests/.
-    Without it a repair is asked to fix code it cannot see: it reconstructs from
-    scratch, re-plans the module layout, and produces a set of files that
-    disagree with each other. Observed on the first real escalation, where two
-    repair attempts failed identically with a test importing from the package
-    root while the implementation had moved into a submodule.
+    Editing works by name, so the names are the context that matters. Listing
+    them is a few hundred tokens that stay identical between attempts, where
+    dumping file bodies was thousands that changed every time — which both
+    poisoned the prefix cache and left the model guessing at targets it had
+    never been shown. Both EDIT failures on story #8 were invented names.
+
+    `include_source` adds the bodies on a repair, where seeing the actual code
+    is worth the churn.
     """
+    from crew_org.tools.ast_edit import qualified_names  # noqa: PLC0415
+
     paths = sorted(
-        str(p.relative_to(worktree))
+        p
         for p in worktree.rglob("*")
         if p.is_file()
         and ".git" not in p.parts
         and ".venv" not in p.parts
         and "__pycache__" not in p.parts
     )
-    lines = ["### Files", ""]
-    lines += [f"- {p}" for p in paths[:MAX_CONTEXT_FILES]]
+
+    lines = ["### Files and what they define", ""]
+    for path in paths[:MAX_CONTEXT_FILES]:
+        rel = path.relative_to(worktree)
+        if path.suffix == ".py":
+            names = sorted(qualified_names(path.read_text(encoding="utf-8", errors="ignore")))
+            defined = ", ".join(names) if names else "nothing at top level"
+            lines.append(f"- `{rel}` — {defined}")
+        else:
+            lines.append(f"- `{rel}`")
     if len(paths) > MAX_CONTEXT_FILES:
         lines.append(f"- … and {len(paths) - MAX_CONTEXT_FILES} more")
+
+    lines += [
+        "",
+        "Target an existing definition by the names above. `Class.method` for a "
+        "method. A file is not a definition: to change what a package exports, "
+        "edit `__all__`, not `__init__`.",
+    ]
 
     for name in CONTEXT_FILES:
         target = worktree / name
         if target.exists():
-            lines += ["", f"### {name}", "", "```", target.read_text()[:2500].strip(), "```"]
+            lines += ["", f"### {name}", "", "```", target.read_text()[:2000].strip(), "```"]
 
     if include_source:
-        lines += ["", "### Current source and tests", ""]
+        lines += ["", "### Current source", ""]
         budget = MAX_SOURCE_CHARS
         for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
             if ".venv" in target.parts or budget <= 0:
@@ -266,11 +297,11 @@ def deliver_story(
                 card=number,
                 role="Developer",
                 failure_class=FailureClass.SCHEMA,
-                attempts=outcome.attempts,
+                attempts=outcome.seen("EDIT"),
                 detail=str(exc)[:400],
             )
             decision = policy.decide(failure, spent=ledger.spent(sprint))
-            outcome.attempts += 1
+            outcome.count("EDIT")
             sink.emit(
                 CrewEvent(
                     kind=EventKind.ESCALATION_DECIDED,
@@ -302,11 +333,11 @@ def deliver_story(
                 card=number,
                 role="Developer",
                 failure_class=FailureClass.VERIFY,
-                attempts=outcome.attempts,
+                attempts=outcome.seen("OVERWRITE"),
                 detail=f"would overwrite existing files: {', '.join(overwrites)}",
             )
             decision = policy.decide(failure, spent=ledger.spent(sprint))
-            outcome.attempts += 1
+            outcome.count("OVERWRITE")
             sink.emit(
                 CrewEvent(
                     kind=EventKind.ESCALATION_DECIDED,
@@ -333,18 +364,22 @@ def deliver_story(
                 card=number,
                 role="Developer",
                 failure_class=FailureClass.SCHEMA,
-                attempts=outcome.attempts,
+                attempts=outcome.seen("EDIT"),
                 detail=str(exc)[:400],
             )
             decision = policy.decide(failure, spent=ledger.spent(sprint))
-            outcome.attempts += 1
+            outcome.count("EDIT")
             sink.emit(
                 CrewEvent(
                     kind=EventKind.ESCALATION_DECIDED,
                     role="Developer",
                     card=number,
                     summary=f"EDIT — {decision.disposition}",
-                    detail={"failure_class": "EDIT", "error": str(exc)[:400]},
+                    detail={
+                        "failure_class": "EDIT",
+                        "attempt": outcome.seen("EDIT"),
+                        "error": str(exc)[:400],
+                    },
                 )
             )
             if decision.disposition is Disposition.RETRY_LOCAL:
@@ -361,11 +396,11 @@ def deliver_story(
             card=number,
             role="Developer",
             failure_class=FailureClass.VERIFY,
-            attempts=outcome.attempts,
+            attempts=outcome.seen("VERIFY"),
             detail=check.failure_report[:400],
         )
         decision = policy.decide(failure, spent=ledger.spent(sprint))
-        outcome.attempts += 1
+        outcome.count("VERIFY")
         sink.emit(
             CrewEvent(
                 kind=EventKind.ESCALATION_DECIDED,
@@ -374,7 +409,7 @@ def deliver_story(
                 summary=f"VERIFY — {decision.disposition}",
                 detail={
                     "failure_class": FailureClass.VERIFY,
-                    "attempt": outcome.attempts,
+                    "attempt": outcome.seen("VERIFY"),
                     "reason": decision.reason,
                     "failing_commands": [r.command for r in check.results if not r.ok],
                     "output": check.failure_report[:600],
@@ -394,7 +429,7 @@ def deliver_story(
                     card=number,
                     role="Developer",
                     failure_class=FailureClass.VERIFY,
-                    local_attempts=outcome.attempts,
+                    local_attempts=outcome.seen("VERIFY"),
                     justification=None,
                     detail=check.failure_report[:400],
                 )

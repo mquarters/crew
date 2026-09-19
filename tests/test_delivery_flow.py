@@ -126,6 +126,7 @@ def harness(tmp_path, monkeypatch):
         implement=None,
         escalate_result=None,
         cards=None,
+        apply=None,
         dry_run=False,
         limit=None,
         repos=None,
@@ -148,7 +149,9 @@ def harness(tmp_path, monkeypatch):
             return escalate_result or EscalationResult(outcome=Outcome.COMPLETED, detail="fixed")
 
         monkeypatch.setattr(delivery, "implement_story", fake_implement)
-        monkeypatch.setattr(delivery.workspace, "apply_implementation", lambda w, impl: [])
+        monkeypatch.setattr(
+            delivery.workspace, "apply_implementation", apply or (lambda w, impl: [])
+        )
         monkeypatch.setattr(delivery.workspace, "check", lambda w: sequence.pop(0))
         monkeypatch.setattr(delivery.claude_code, "escalate", fake_escalate)
 
@@ -417,15 +420,37 @@ def test_a_failure_event_records_why_not_only_what(harness):
 # --- the repair must see its own work -----------------------------------
 
 
-def test_the_first_attempt_gets_a_listing_without_source(tmp_path):
-    """A fresh implementation does not need the files it has not written."""
+def test_the_first_attempt_is_shown_names_not_bodies(tmp_path):
+    """Editing works by name, so names are the context that matters. Bodies are
+    thousands of volatile tokens the model does not need to choose a target."""
     from crew_org.flows.delivery import repository_context
 
     (tmp_path / "src").mkdir()
-    (tmp_path / "src/mod.py").write_text("SENTINEL = 1\n")
+    (tmp_path / "src/mod.py").write_text(
+        "def calculate_throughput(c):\n    SENTINEL = 1\n    return SENTINEL\n"
+    )
     context = repository_context(tmp_path)
-    assert "src/mod.py" in context
+    assert "calculate_throughput" in context
     assert "SENTINEL" not in context
+
+
+def test_methods_are_shown_qualified(tmp_path):
+    """The model has to know that a method is addressed as Class.method."""
+    from crew_org.flows.delivery import repository_context
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/mod.py").write_text("class Card:\n    def age(self):\n        return 0\n")
+    assert "Card.age" in repository_context(tmp_path)
+
+
+def test_the_context_warns_against_targeting_a_file(tmp_path):
+    """Story #8 tried to edit a definition called __init__ in __init__.py."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/__init__.py").write_text('__all__ = ["f"]\n')
+    from crew_org.flows.delivery import repository_context
+
+    assert "__all__" in repository_context(tmp_path)
+    assert "not `__init__`" in repository_context(tmp_path)
 
 
 def test_a_repair_is_shown_the_current_file_contents(tmp_path):
@@ -460,8 +485,8 @@ def test_context_is_recomputed_on_every_attempt(harness):
     _, _, _, _, calls, _ = harness(checks=[red(), green()])
     assert len(calls["context"]) == 2
     # The first pass has nothing written yet; the repair is shown what exists.
-    assert "Current source and tests" not in calls["context"][0]
-    assert "Current source and tests" in calls["context"][1]
+    assert "Current source" not in calls["context"][0]
+    assert "Current source" in calls["context"][1]
 
 
 # --- the regression guard in the loop -----------------------------------
@@ -573,3 +598,27 @@ def test_without_an_allow_list_nothing_is_excluded(harness):
     result, _, _, _, calls, _ = harness(checks=[green()], cards=[story(6)])
     assert calls["implement"] == 1
     assert result.not_ours == []
+
+
+def test_a_fumbled_name_does_not_spend_the_budget_for_real_failures(harness):
+    """Story #8: two invented definition names left the first genuine test
+    failure with nothing in hand, so it escalated immediately."""
+    from crew_org.tools.ast_edit import EditError
+
+    calls = {"n": 0}
+
+    def sometimes_unapplicable(worktree, implementation):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise EditError("no definition named 'invented'")
+        return []
+
+    # Two edit failures, then one test failure, then green.
+    result, _, _, _, _, seen = harness(checks=[red(), green()], apply=sometimes_unapplicable)
+
+    edits = [e for e in seen if e.detail.get("failure_class") == "EDIT"]
+    verifies = [e for e in seen if e.detail.get("failure_class") == "VERIFY"]
+    assert len(edits) == 2
+    # The VERIFY failure still gets a repair rather than escalating on arrival.
+    assert verifies and "retry_local" in verifies[0].summary
+    assert result.delivered
