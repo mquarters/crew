@@ -21,6 +21,15 @@ by admin bypass — which makes the review gate theatre.
 So the crew needs an identity that is *not* yours. One fine-grained token does
 not solve this; it needs a second account.
 
+And then it needs a *third*. The rule is about the identity that opened the
+pull request, not about you: once the Developer opens PRs as `crew[bot]`, the
+Code Reviewer reviewing as `crew[bot]` is refused in exactly the same way. It
+still posts — as `COMMENTED` — so nothing errors, `crew review` prints
+"approved", and `merge_approved` sits waiting for an `APPROVED` review that can
+never arrive. Every story stops in Awaiting Approval until a person clicks.
+
+See [The reviewing app](#the-reviewing-app).
+
 ---
 
 ## Why the board is organization-owned
@@ -162,6 +171,44 @@ mqucifer-crew[bot] <APP_ID+mqucifer-crew[bot]@users.noreply.github.com>
 ```
 
 Pushes, issues, comments and reviews carry the bot identity automatically.
+
+## The reviewing app
+
+A second GitHub App, whose only job is to be somebody else.
+
+Create it exactly as above, with a narrower grant:
+
+| Permission | Level | Why |
+|---|---|---|
+| Pull requests | Write | Post the review, including an approving one |
+| Organization projects | Read | Read the board to know what it is reviewing |
+
+It needs no contents and no issues access: it reads diffs and writes verdicts.
+Install it on the repositories the crew delivers into, put its private key in
+`.secrets/`, and set:
+
+```
+GITHUB_REVIEW_APP_ID=
+GITHUB_REVIEW_APP_PRIVATE_KEY=.secrets/<app>.private-key.pem
+GITHUB_REVIEW_APP_INSTALLATION_ID=
+```
+
+`crew review` resolves this app; everything else resolves the delivery app.
+Unset, it falls back to the delivery app and you are back to Problem 2's second
+half — `crew auth` says so rather than leaving you to find out at merge time:
+
+```
+reviewing identity: mqucifer-crew-approver[bot] — can approve.
+```
+
+### What this means for the merge gate
+
+With both apps configured, the crew approves and merges its own work without a
+person in the loop. That is the constitution working as written — the Sponsor
+approves epics and reviews at sprint end, not every swimlane — but it is worth
+naming. What still stands between generated code and `main`: QA verifying each
+acceptance criterion, the sandbox, the required `tests` check, and branch
+protection. No agent has `administration`, so none of them can turn those off.
 
 ## Rotation
 

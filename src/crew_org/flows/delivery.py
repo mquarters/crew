@@ -106,6 +106,11 @@ class DeliveryResult:
     not_ours: list[int] = field(default_factory=list)
     landed: list[int] = field(default_factory=list)
     conflicted: list[int] = field(default_factory=list)
+    # Why a story that was ready to land did not. merge_approved has always
+    # worked these out and the command printed neither, so a run that silently
+    # skipped every merge looked exactly like a run with nothing to merge.
+    awaiting_approval: list[tuple[int, int]] = field(default_factory=list)
+    unmergeable: list[tuple[int, str]] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -639,6 +644,8 @@ def deliver(
     landed = merge_approved(board, issues, sink, cards=cards, default_repo=repo, repos=repos)
     result.landed = [card for card, _pr in landed.merged]
     result.conflicted = [card for card, _pr in landed.conflicted]
+    result.awaiting_approval = list(landed.awaiting_approval)
+    result.unmergeable = list(landed.failed)
     if landed.merged or landed.conflicted:
         cards = board.cards()
 

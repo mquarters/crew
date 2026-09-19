@@ -88,6 +88,9 @@ class FakeIssues:
         self.prs.append(head)
         return {"number": 100 + len(self.prs)}
 
+    def pull_for_branch(self, repo, branch):
+        return None
+
 
 class FakeWorkspace:
     def for_repo(self, repo):
@@ -569,6 +572,17 @@ def test_context_is_recomputed_on_every_attempt(harness):
     # The first pass has nothing written yet; the repair is shown what exists.
     assert "FIRST_ATTEMPT" not in calls["context"][0]
     assert "FIRST_ATTEMPT" in calls["context"][1]
+
+
+def test_a_story_that_could_not_be_landed_says_why(harness):
+    """merge_approved has always worked out why a ready story did not land, and
+    the result dropped it on the floor: a run that silently skipped every merge
+    looked exactly like a run with nothing to merge."""
+    approved = story(6).model_copy(update={"status": "Awaiting Approval"})
+    result, *_ = harness(checks=[green()], cards=[approved, story(7)])
+
+    assert result.landed == []
+    assert result.unmergeable == [(6, "no open pull request")]
 
 
 # --- the regression guard in the loop -----------------------------------
