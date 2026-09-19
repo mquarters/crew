@@ -1,9 +1,9 @@
 """Detecting an implementation that destroys existing work.
 
-The Developer returns whole files, so extending an existing module means
-rewriting it — and a model asked to add one metric will happily redesign the
-module it is adding to. Observed on story #7, which rewrote story #6's merged
-code, renamed its public functions, and implemented three future stories.
+A model asked to add one metric will happily redesign the module it is adding
+to. Observed on story #7, which rewrote story #6's merged code and renamed its
+public functions; and again on story #9, which turned three properties into
+methods and left thirteen merged tests failing.
 
 This is checked mechanically because a prompt asking the model not to do it is a
 request, not a guarantee.
@@ -13,11 +13,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from crew_org.tools.regression import (
+    broken_contracts,
     describe,
+    describe_contracts,
     find_regressions,
     public_names,
     removed_public_names,
+    signatures_for_context,
     undeclared_changes,
 )
 
@@ -218,3 +223,156 @@ def test_declaring_the_edit_clears_it(tmp_path):
         tmp_path, [Written(path="mod.py", content=changed)], declared={"format_performance_table"}
     )
     assert found == {}
+
+
+# --- contracts other code already depends on -----------------------------
+#
+# Story #9 is the case these are written from: asked to add one column, the
+# Developer changed a frozen dataclass, turned three properties into methods,
+# changed two return types from `int` to `float | None`, and gave
+# format_performance_table five scalar arguments in place of two. The private
+# helper consuming those values was never touched, so it summed integers over a
+# list of None and thirteen merged tests died of a TypeError.
+
+MODULE = """
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Card:
+    created: date
+    started: date | None = None
+
+    @property
+    def cycle_time(self) -> int:
+        return 0
+
+
+def format_performance_table(cards, wip_limits=None) -> str:
+    return "table"
+
+
+def _mean_days(values):
+    return sum(values) / len(values)
+"""
+
+
+@dataclass
+class Ed:
+    path: str
+    operation: str
+    target: str
+    source: str = ""
+
+
+@pytest.fixture
+def module(tmp_path):
+    (tmp_path / "m.py").write_text(MODULE)
+    return tmp_path
+
+
+def test_rewriting_a_body_is_allowed(module):
+    """Stories are made of body edits. A check that refused them refuses
+    everything."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "format_performance_table",
+        "def format_performance_table(cards, wip_limits=None) -> str:\n"
+        '    return "a table with one more column"\n',
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_changing_a_parameter_list_is_refused(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "format_performance_table",
+        "def format_performance_table(cycle_time, lead_time, throughput) -> str:\n"
+        '    return "table"\n',
+    )
+    broken = broken_contracts(module, [edit])
+    assert "m.py::format_performance_table" in broken
+    was, now = broken["m.py::format_performance_table"]
+    assert "cards, wip_limits" in was
+    assert "cycle_time" in now
+
+
+def test_a_property_becoming_a_method_is_refused(module):
+    """The exact change that broke story #9: callers write `card.cycle_time`,
+    and afterwards they must write `card.cycle_time()`."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card.cycle_time",
+        "def cycle_time(self) -> float | None:\n    return None\n",
+    )
+    broken = broken_contracts(module, [edit])
+    assert "m.py::Card.cycle_time" in broken
+    was, now = broken["m.py::Card.cycle_time"]
+    assert "property" in was and "property" not in now
+
+
+def test_adding_a_field_to_a_dataclass_is_refused(module):
+    """A dataclass's fields are its constructor, so a new one is a new call."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass\nclass Card:\n    title: str\n    created: date\n"
+        "    started: date | None = None\n",
+    )
+    assert "m.py::Card" in broken_contracts(module, [edit])
+
+
+def test_deleting_a_public_definition_is_refused(module):
+    broken = broken_contracts(module, [Ed("m.py", "delete", "format_performance_table")])
+    assert broken["m.py::format_performance_table"][1] == "removed"
+
+
+def test_adding_a_new_definition_is_not_a_contract_break(module):
+    edit = Ed(
+        "m.py",
+        "add",
+        "calculate_blocked_aging",
+        "def calculate_blocked_aging(cards):\n    return 0\n",
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_a_private_helper_has_no_contract_to_break(module):
+    """`_mean_days` is the author's business. Only names other code can import
+    are promises."""
+    edit = Ed(
+        "m.py", "replace", "_mean_days", "def _mean_days(values, default=0):\n    return default\n"
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_a_target_that_does_not_exist_is_not_reported_here(module):
+    """Inventing a name is a different failure, and the edit machinery already
+    reports it as one. Reporting it twice would spend two attempts on it."""
+    assert broken_contracts(module, [Ed("m.py", "replace", "no_such_thing", "def x(): pass")]) == {}
+
+
+def test_the_message_names_the_definition_and_both_shapes(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "format_performance_table",
+        "def format_performance_table(a) -> str:\n    return ''\n",
+    )
+    message = describe_contracts(broken_contracts(module, [edit]))
+    assert "format_performance_table" in message
+    assert "cards, wip_limits" in message
+    assert "add a new definition alongside" in message
+
+
+def test_the_context_shows_what_the_check_will_judge(module):
+    """The model is told the contract before it writes, not only after it has
+    broken one. A constraint never stated is not one the model can respect."""
+    signatures = signatures_for_context(MODULE)
+    assert signatures["format_performance_table"] == "(cards, wip_limits)"
+    assert signatures["Card.cycle_time"] == "(self) [property]"
+    assert "_mean_days" not in signatures

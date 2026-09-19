@@ -167,11 +167,38 @@ def test_ledger_of_a_fresh_sprint_is_empty(tmp_path):
 # --- The real config -----------------------------------------------------
 
 
-def test_shipped_org_config_builds_a_policy_that_forbids_schema_and_scope():
+NEVER = (FailureClass.SCHEMA, FailureClass.SCOPE, FailureClass.REGRESSION)
+
+
+def test_shipped_org_config_builds_a_policy_that_forbids_the_unescalatable():
     policy = EscalationPolicy.from_config(load_org())
-    assert policy.never_escalate == {FailureClass.SCHEMA, FailureClass.SCOPE}
-    for cls in (FailureClass.SCHEMA, FailureClass.SCOPE):
+    assert policy.never_escalate == set(NEVER)
+    for cls in NEVER:
         assert not policy.decide(failure(cls, attempts=99), spent=0).escalates
+
+
+def test_a_regression_repairs_locally_against_the_contracts_it_must_keep():
+    policy = EscalationPolicy.from_config(load_org())
+    decision = policy.decide(failure(FailureClass.REGRESSION, attempts=0), spent=0)
+    assert decision.disposition is Disposition.RETRY_LOCAL
+
+
+def test_a_regression_that_persists_blocks_rather_than_reaching_for_a_larger_model():
+    """A model that keeps reshaping interfaces after being told exactly which to
+    preserve is a task-design defect. Escalating would spend the budget making a
+    rewrite land, which is the opposite of what the budget is for."""
+    policy = EscalationPolicy.from_config(load_org())
+    decision = policy.decide(failure(FailureClass.REGRESSION, attempts=99), spent=0)
+    assert decision.disposition is Disposition.BLOCK
+    assert not decision.escalates
+
+
+def test_a_regression_never_escalates_even_with_budget_to_spare():
+    policy = EscalationPolicy.from_config(load_org())
+    for spent in (0, 1, 2):
+        assert not policy.decide(
+            failure(FailureClass.REGRESSION, attempts=99), spent=spent
+        ).escalates
 
 
 # --- outcomes ------------------------------------------------------------

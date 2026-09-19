@@ -85,7 +85,7 @@ execution:
 
 escalation:
   # Failure classes that may NEVER escalate. Enforced in code, not by prompt.
-  never_escalate: [SCHEMA, SCOPE]
+  never_escalate: [SCHEMA, SCOPE, REGRESSION]
   may_escalate: [VERIFY, CAPABILITY]
   require_justification: [CAPABILITY]
   concurrency: 1                # protects the subscription rate-limit window

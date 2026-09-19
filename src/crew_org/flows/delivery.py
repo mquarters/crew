@@ -45,6 +45,10 @@ MAX_CONTEXT_FILES = 40
 # Source and tests are shown in full on a repair, bounded so a large tree does
 # not crowd out the failure itself.
 MAX_SOURCE_CHARS = 20_000
+# Tool droppings. They tell the Developer nothing and they are not free: the
+# file listing is capped, so eleven cache entries are eleven real files the
+# model never gets shown.
+IGNORED_DIRS = frozenset({".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"})
 
 
 @dataclass
@@ -197,26 +201,37 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
     poisoned the prefix cache and left the model guessing at targets it had
     never been shown. Both EDIT failures on story #8 were invented names.
 
+    The names carry their signatures, because a name alone does not say that
+    `is_completed` is a property or that `format_performance_table` takes
+    `(cards, wip_limits)`. Story #9 changed both and broke thirteen tests, and
+    it had never been shown either contract — it was refused for violating a
+    rule nobody had told it. Signatures cost a few tokens more and are just as
+    stable between attempts, so the cacheable prefix is unaffected.
+
     `include_source` adds the bodies on a repair, where seeing the actual code
     is worth the churn.
     """
-    from crew_org.tools.ast_edit import qualified_names  # noqa: PLC0415
+    from crew_org.tools.regression import signatures_for_context  # noqa: PLC0415
 
     paths = sorted(
         p
         for p in worktree.rglob("*")
         if p.is_file()
-        and ".git" not in p.parts
-        and ".venv" not in p.parts
-        and "__pycache__" not in p.parts
+        and not (IGNORED_DIRS & set(p.parts))
     )
 
     lines = ["### Files and what they define", ""]
     for path in paths[:MAX_CONTEXT_FILES]:
         rel = path.relative_to(worktree)
         if path.suffix == ".py":
-            names = sorted(qualified_names(path.read_text(encoding="utf-8", errors="ignore")))
-            defined = ", ".join(names) if names else "nothing at top level"
+            signatures = signatures_for_context(
+                path.read_text(encoding="utf-8", errors="ignore")
+            )
+            defined = (
+                ", ".join(f"{name}{sig}" for name, sig in sorted(signatures.items()))
+                if signatures
+                else "nothing at top level"
+            )
             lines.append(f"- `{rel}` — {defined}")
         else:
             lines.append(f"- `{rel}`")
@@ -228,6 +243,12 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
         "Target an existing definition by the names above. `Class.method` for a "
         "method. A file is not a definition: to change what a package exports, "
         "edit `__all__`, not `__init__`.",
+        "",
+        "The signatures above are what merged code already calls. Change a "
+        "body as freely as the story needs, but keep every parameter list, "
+        "every `[property]`, and every existing definition — if this story "
+        "needs something the current shape cannot express, add a new "
+        "definition beside it rather than reshaping the old one.",
     ]
 
     for name in CONTEXT_FILES:
@@ -364,6 +385,43 @@ def deliver_story(
                 )
                 continue
             outcome.blocked_reason = f"kept rewriting existing files: {', '.join(overwrites)}"
+            return outcome
+
+        # Checked before a single byte is written. A contract break is only
+        # visible as a wall of failing tests once it has been applied, and by
+        # then the model is repairing a symptom several steps from the cause —
+        # story #9 changed a return type to None and spent every attempt on the
+        # TypeError it produced three functions away.
+        broken = regression.broken_contracts(worktree, implementation.edits)
+        if broken:
+            failure = LocalFailure(
+                card=number,
+                role="Developer",
+                failure_class=FailureClass.REGRESSION,
+                attempts=outcome.seen("REGRESSION"),
+                detail="; ".join(f"{k}: {was} -> {now}" for k, (was, now) in broken.items())[:400],
+            )
+            decision = policy.decide(failure, spent=ledger.spent(sprint))
+            outcome.count("REGRESSION")
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.ESCALATION_DECIDED,
+                    role="Developer",
+                    card=number,
+                    summary=f"REGRESSION — {decision.disposition}",
+                    detail={
+                        "failure_class": FailureClass.REGRESSION,
+                        "attempt": outcome.seen("REGRESSION"),
+                        "reason": decision.reason,
+                        "contracts": {k: list(v) for k, v in broken.items()},
+                    },
+                )
+            )
+            if decision.disposition is Disposition.RETRY_LOCAL:
+                feedback = regression.describe_contracts(broken)
+                continue
+            outcome.failure_detail = regression.describe_contracts(broken)
+            outcome.blocked_reason = decision.reason
             return outcome
 
         try:

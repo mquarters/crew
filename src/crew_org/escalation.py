@@ -43,6 +43,14 @@ class FailureClass(StrEnum):
     CAPABILITY = "CAPABILITY"
     """The agent judges the task beyond its reach. May escalate with justification."""
 
+    REGRESSION = "REGRESSION"
+    """The implementation would change a contract merged code already depends on.
+
+    Never escalates. A model that cannot stop reshaping interfaces is a
+    task-design defect, not a capability gap, and spending the budget to make a
+    rewrite land is the opposite of what the budget is for.
+    """
+
 
 class Disposition(StrEnum):
     """What to do about a failure."""
@@ -184,6 +192,20 @@ class EscalationPolicy:
 
         # --- Classes that may never escalate ------------------------------
         if cls_ in self.never_escalate:
+            if cls_ is FailureClass.REGRESSION:
+                if failure.attempts < self.local_repair_attempts:
+                    return EscalationDecision(
+                        disposition=Disposition.RETRY_LOCAL,
+                        reason=f"REGRESSION, attempt {failure.attempts + 1} of "
+                        f"{self.local_repair_attempts}; the contracts it must keep are "
+                        "named in the feedback.",
+                    )
+                return EscalationDecision(
+                    disposition=Disposition.BLOCK,
+                    reason="The implementation keeps rewriting interfaces other work "
+                    "depends on, after being told exactly which to preserve. That needs "
+                    "a person, not a larger model.",
+                )
             if cls_ is FailureClass.SCOPE:
                 return EscalationDecision(
                     disposition=Disposition.RETURN_TO_REFINEMENT,

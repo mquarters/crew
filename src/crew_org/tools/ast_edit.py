@@ -74,11 +74,20 @@ def _definitions(tree: ast.Module) -> dict[str, ast.stmt]:
     return found
 
 
-def qualified_names(source: str) -> set[str]:
+def definitions(source: str) -> dict[str, ast.stmt]:
+    """Every addressable definition in a module, by qualified dotted name.
+
+    Unparseable source has no addressable definitions, which is the useful
+    answer for every caller: there is nothing here to edit or to compare.
+    """
     try:
-        return set(_definitions(ast.parse(source)))
+        return _definitions(ast.parse(source))
     except SyntaxError:
-        return set()
+        return {}
+
+
+def qualified_names(source: str) -> set[str]:
+    return set(definitions(source))
 
 
 def _span(node: ast.stmt) -> tuple[int, int]:
