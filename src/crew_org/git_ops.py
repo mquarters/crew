@@ -257,6 +257,17 @@ class Workspace:
         self.path, self.branch = path, branch
         return path
 
+    def head(self) -> str:
+        """The commit the open worktree is on.
+
+        What a verdict is *about*. A verdict that outlives the code it judged is
+        worse than no verdict, and one that is thrown away every time the code
+        is unchanged wastes a model call on an answer nobody's disagreed with.
+        """
+        if self.path is None:
+            raise GitError("no worktree is open")
+        return _run(["rev-parse", "HEAD"], cwd=self.path)
+
     def commit(self, message: str) -> bool:
         """Commit everything in the worktree. False if there was nothing to commit."""
         if self.path is None:

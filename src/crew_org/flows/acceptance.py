@@ -56,6 +56,21 @@ GOAL_TYPE = "Goal"
 QA_MARKER = "<!-- crew:qa -->"
 
 
+def qa_marker(revision: str) -> str:
+    """The marker for a verdict on one revision.
+
+    `has_comment_marked` matches *any* comment carrying the bare marker, so the
+    rejection QA itself wrote permanently disqualified the card: the Developer
+    repaired, the card came back to QAing, and QA skipped it in silence — for
+    good, while the command printed "Nothing awaiting QA".
+
+    Scoping the marker to the commit keeps the idempotency the guard was written
+    for — a re-run on unchanged code posts nothing — and lets new commits be
+    judged. Bare `QA_MARKER` stays in the body so older verdicts remain findable.
+    """
+    return f"<!-- crew:qa {revision[:12]} -->"
+
+
 @dataclass
 class QAOutcome:
     card: int
@@ -73,6 +88,10 @@ class AcceptanceResult:
     verified: list[QAOutcome] = field(default_factory=list)
     returned: list[QAOutcome] = field(default_factory=list)
     failed: list[tuple[int, str]] = field(default_factory=list)
+    # Cards QA deliberately did not judge again. Reported, because a silent
+    # `continue` is how a card sat in QAing for good while the run said there
+    # was nothing to do.
+    skipped: list[tuple[int, str]] = field(default_factory=list)
     parents_closed: list[int] = field(default_factory=list)
 
 
@@ -82,9 +101,12 @@ def awaiting_qa(cards: list[Card]) -> list[Card]:
     ]
 
 
-def render_qa(verdict: QAVerdict) -> str:
+def render_qa(verdict: QAVerdict, revision: str = "") -> str:
     lines = [
+        # Both: the bare marker keeps every verdict findable, the revision one
+        # says which commit this verdict is about.
         QA_MARKER,
+        qa_marker(revision) if revision else "",
         f"## QA — {'accepted' if verdict.accepted else 'not accepted'}",
         "",
         verdict.summary,
@@ -149,10 +171,19 @@ def run_qa(
 
     for card in awaiting_qa(cards):
         number = card.number or 0
-        if issues.has_comment_marked(repo, number, QA_MARKER):
+        branch = branch_name(number, card.title)
+
+        try:
+            worktree = ws.open_existing(branch)
+            revision = ws.head()
+        except Exception as exc:  # noqa: BLE001
+            result.failed.append((number, f"{type(exc).__name__}: {exc}"))
             continue
 
-        branch = branch_name(number, card.title)
+        if issues.has_comment_marked(repo, number, qa_marker(revision)):
+            result.skipped.append((number, f"already judged at {revision[:7]}"))
+            continue
+
         sink.emit(
             CrewEvent(
                 kind=EventKind.AGENT_STARTED,
@@ -162,7 +193,6 @@ def run_qa(
             )
         )
         try:
-            worktree = ws.open_existing(branch)
             check = workspace.check(worktree, sandbox=sandbox)
             verdict = verify_story(
                 f"{card.title}\n\n{issues.get(repo, number).get('body') or ''}",
@@ -183,7 +213,7 @@ def run_qa(
         finally:
             ws.close()
 
-        issues.comment(repo, number, render_qa(verdict))
+        issues.comment(repo, number, render_qa(verdict, revision))
 
         if verdict.accepted:
             move_card(
