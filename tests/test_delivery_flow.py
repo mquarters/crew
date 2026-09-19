@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from crew_org.crews.delivery_crew import FileWrite, Implementation
+from crew_org.crews.delivery_crew import FileEdit, FileWrite, Implementation
 from crew_org.escalation import EscalationLedger, EscalationPolicy, FailureClass
 from crew_org.events import EventKind, EventSink
 from crew_org.flows import delivery
@@ -21,7 +21,7 @@ from crew_org.tools.workspace import CheckResult, CommandResult
 SPRINT = "S1"
 IMPL = Implementation(
     summary="Adds cycle time",
-    files=[
+    new_files=[
         FileWrite(path="src/m.py", content="def cycle():\n    return 1\n"),
         FileWrite(path="tests/test_m.py", content="def test_cycle():\n    assert True\n"),
     ],
@@ -148,7 +148,7 @@ def harness(tmp_path, monkeypatch):
             return escalate_result or EscalationResult(outcome=Outcome.COMPLETED, detail="fixed")
 
         monkeypatch.setattr(delivery, "implement_story", fake_implement)
-        monkeypatch.setattr(delivery.workspace, "apply", lambda w, f: [x.path for x in f])
+        monkeypatch.setattr(delivery.workspace, "apply_implementation", lambda w, impl: [])
         monkeypatch.setattr(delivery.workspace, "check", lambda w: sequence.pop(0))
         monkeypatch.setattr(delivery.claude_code, "escalate", fake_escalate)
 
@@ -467,51 +467,53 @@ def test_context_is_recomputed_on_every_attempt(harness):
 # --- the regression guard in the loop -----------------------------------
 
 
-DESTRUCTIVE = Implementation(
+OVERWRITING = Implementation(
     summary="Rewrites the module",
-    files=[
+    new_files=[
         FileWrite(path="src/m.py", content="def only_the_new_thing():\n    return 1\n"),
         FileWrite(path="tests/test_m.py", content="def test_x():\n    assert True\n"),
     ],
 )
 
 
-def test_an_implementation_that_deletes_existing_names_is_rejected(harness, monkeypatch, tmp_path):
-    """Caught before it is written to disk. Otherwise it surfaces later as other
-    stories' tests failing to import, which reads as a coding error rather than
-    as the regression it is."""
+def test_writing_over_an_existing_file_is_refused(harness, monkeypatch, tmp_path):
+    """A 'new file' that already exists is a whole-file rewrite by another name."""
 
     def seeded_open(self, branch):
         path = tmp_path / branch.replace("/", "__")
         (path / "src").mkdir(parents=True, exist_ok=True)
         (path / "src/m.py").write_text("def already_merged():\n    return 0\n")
+        (path / "tests").mkdir(parents=True, exist_ok=True)
+        (path / "tests/test_m.py").write_text("def test_old():\n    assert True\n")
         return path
 
     monkeypatch.setattr(FakeWorkspace, "open", seeded_open, raising=False)
-    # The retry must preserve what already exists, or it is equally destructive.
-    preserving = Implementation(
+
+    editing = Implementation(
         summary="Adds throughput alongside what is there",
-        files=[
-            FileWrite(
+        edits=[
+            FileEdit(
                 path="src/m.py",
-                content=(
-                    "def already_merged():\n    return 0\n\n\ndef throughput():\n    return 1\n"
-                ),
+                operation="add",
+                target="throughput",
+                source="def throughput():\n    return 1",
             ),
-            FileWrite(path="tests/test_m.py", content="def test_x():\n    assert True\n"),
+            FileEdit(
+                path="tests/test_m.py",
+                operation="add",
+                target="test_throughput",
+                source="def test_throughput():\n    assert True",
+            ),
         ],
     )
-
-    def implement(n):
-        return DESTRUCTIVE if n == 1 else preserving
-
-    result, _, _, _, calls, seen = harness(checks=[green()], implement=implement)
-    # The destructive attempt never reached the sandbox; the retry did.
+    result, _, _, _, calls, seen = harness(
+        checks=[green()], implement=lambda n: OVERWRITING if n == 1 else editing
+    )
     assert calls["implement"] == 2
     assert result.delivered
     decided = [e for e in seen if e.kind == EventKind.ESCALATION_DECIDED]
-    assert decided[0].detail["failure_class"] == "REGRESSION"
-    assert "already_merged" in decided[0].detail["removed"]["src/m.py"]
+    assert decided[0].detail["failure_class"] == "OVERWRITE"
+    assert "src/m.py" in decided[0].detail["paths"]
 
 
 # --- which repositories the crew may work in ----------------------------

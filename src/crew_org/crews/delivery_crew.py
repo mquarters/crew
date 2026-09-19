@@ -18,6 +18,7 @@ from crewai import Crew, Process, Task
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crew_org.agents import build_agents
+from crew_org.tools.ast_edit import Operation
 
 MAX_FILE_BYTES = 120_000
 
@@ -66,60 +67,96 @@ class FileWrite(BaseModel):
         return name.startswith("test_") or name.endswith("_test.py")
 
 
-class Implementation(BaseModel):
-    summary: str = Field(description="What changed and why, for the pull request body")
-    files: list[FileWrite] = Field(description="Every file to create or replace, in full")
-    modifies: list[str] = Field(
-        default_factory=list,
+class FileEdit(BaseModel):
+    """One change to an existing file, addressed by name rather than position."""
+
+    path: str = Field(description="Repository-relative path of the file to edit")
+    operation: Operation = Field(
         description=(
-            "Names of EXISTING functions, classes or constants you are deliberately "
-            "changing. Leave empty when only adding. Anything you change without "
-            "naming here is treated as an accident."
-        ),
+            "replace (an existing definition), add (a new top-level definition), "
+            "add_method (to an existing class), add_import, or delete"
+        )
+    )
+    target: str = Field(
+        description=(
+            "Qualified name: `calculate_throughput`, or `Card.is_completed` for a "
+            "method. For add_import, any short label."
+        )
+    )
+    source: str = Field(
+        default="",
+        description="The complete new definition, or the import statement. Empty only for delete.",
     )
 
-    @field_validator("files")
+    @field_validator("path")
     @classmethod
-    def _not_empty(cls, value: list[FileWrite]) -> list[FileWrite]:
-        if not value:
-            raise ValueError("an implementation must write at least one file")
-        paths = [f.path for f in value]
-        if len(set(paths)) != len(paths):
-            raise ValueError("the same path is written twice; each file appears once, in full")
-        return value
+    def _stays_in_the_repository(cls, value: str) -> str:
+        return FileWrite._stays_in_the_repository(value)
+
+    @model_validator(mode="after")
+    def _source_matches_the_operation(self) -> FileEdit:
+        if self.operation is not Operation.DELETE and not self.source.strip():
+            raise ValueError(f"{self.operation} needs source. Only delete may omit it.")
+        return self
+
+    @property
+    def is_test(self) -> bool:
+        name = PurePosixPath(self.path).name
+        return name.startswith("test_") or name.endswith("_test.py")
+
+
+class Implementation(BaseModel):
+    summary: str = Field(description="What changed and why, for the pull request body")
+    new_files: list[FileWrite] = Field(
+        default_factory=list,
+        description="Files that do not exist yet, in full. Never an existing file.",
+    )
+    edits: list[FileEdit] = Field(
+        default_factory=list,
+        description="Changes to files that already exist, one per definition.",
+    )
+
+    @model_validator(mode="after")
+    def _does_something(self) -> Implementation:
+        if not self.new_files and not self.edits:
+            raise ValueError("an implementation must create a file or edit one")
+        return self
 
     @model_validator(mode="after")
     def _has_a_test(self) -> Implementation:
         """Definition of Done §7.1: every acceptance criterion needs a test.
 
-        Enforced here so a missing test is a SCHEMA failure the repair loop
-        handles, rather than something a reviewer catches three columns later.
+        Satisfied by a new test file or by adding to an existing one — a story
+        extending a module usually adds cases rather than a whole file.
         """
-        if not any(f.is_test for f in self.files):
-            raise ValueError(
-                "no test file. Every acceptance criterion needs an automated test that "
-                "proves it — add a test_*.py that exercises the criteria."
-            )
-        return self
+        if any(f.is_test for f in self.new_files) or any(e.is_test for e in self.edits):
+            return self
+        raise ValueError(
+            "no test. Every acceptance criterion needs an automated test that proves "
+            "it — add one to an existing test file, or create a new test_*.py."
+        )
 
 
 # Identical for every story and every repair, so it is the cacheable prefix.
 STANDING_INSTRUCTIONS = (
     "Implement one story.\n\n"
     "Write the test that expresses each acceptance criterion, then the code that "
-    "satisfies it. Return every file you create or change, in full — content is "
-    "written verbatim, so partial files destroy the original.\n"
-    "Match the surrounding code's idiom. Do not widen scope beyond the story.\n"
-    "Do not change lint or tool configuration: a stricter rule you add is a rule you "
-    "then have to satisfy, and that is not what the story asked for.\n"
-    "Where a file already exists, keep every existing definition byte for byte — same "
-    "name, same signature, same body — and add alongside it. Other stories depend on "
-    "that code.\n"
-    "If extending the story genuinely requires changing something that is already "
-    "there, list its name in `modifies`. That makes the change deliberate and "
-    "reviewable. Anything changed without being declared is rejected.\n"
-    "Implement only this story. Metrics belonging to other stories are not yours to "
-    "add, even when they look adjacent."
+    "satisfies it.\n\n"
+    "## How to return your work\n\n"
+    "For a file that does not exist yet, return it in `new_files`, in full.\n"
+    "For a file that already exists, return `edits` — one per definition, addressed "
+    "by name. You never reproduce code you are not changing, and anything you do not "
+    "name is left exactly as it is.\n\n"
+    "  replace     an existing function, method or constant, by name\n"
+    "  add         a new top-level function or class\n"
+    "  add_method  a method on an existing class\n"
+    "  add_import  an import the new code needs\n"
+    "  delete      remove a definition - deliberate, and rarely what a story wants\n\n"
+    "Name a method as `Class.method`. Give the complete definition as `source`; "
+    "indentation is corrected for you.\n\n"
+    "Match the surrounding code's idiom. Implement only this story - work belonging "
+    "to other stories is not yours to add, even when it looks adjacent. Do not change "
+    "lint or tool configuration."
 )
 
 

@@ -66,6 +66,39 @@ class CheckResult:
         return "\n\n".join(parts)
 
 
+def apply_implementation(worktree: Path, implementation) -> list[str]:
+    """Write new files and apply edits to existing ones.
+
+    New files and edits are separate on purpose. A new file is written whole;
+    an existing file is only ever changed by name, so nothing the model did not
+    name can be touched.
+    """
+    from crew_org.tools.ast_edit import Edit, EditError, apply_edits  # noqa: PLC0415
+
+    root = worktree.resolve()
+    written = apply(worktree, implementation.new_files)
+
+    by_path: dict[str, list[Edit]] = {}
+    for item in implementation.edits:
+        by_path.setdefault(item.path, []).append(
+            Edit(operation=item.operation, target=item.target, source=item.source)
+        )
+
+    for path, edits in by_path.items():
+        target = (root / path).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError(f"{path!r} resolves outside the worktree")
+        if not target.exists():
+            raise EditError(
+                f"{path!r} does not exist. A file that does not exist yet belongs in "
+                "new_files, written in full."
+            )
+        target.write_text(apply_edits(target.read_text(encoding="utf-8"), edits), encoding="utf-8")
+        written.append(path)
+
+    return written
+
+
 def apply(worktree: Path, files: list[FileWrite]) -> list[str]:
     """Write an implementation into the worktree. Returns the paths written.
 

@@ -77,26 +77,54 @@ def test_an_enormous_file_is_refused():
 def test_an_implementation_without_a_test_is_refused():
     """DoD §7.1 enforced as a schema rule, so it is a SCHEMA failure the repair
     loop handles rather than something a reviewer catches later."""
-    with pytest.raises(ValidationError, match="no test file"):
-        Implementation(summary="s", files=[code()])
+    with pytest.raises(ValidationError, match="no test"):
+        Implementation(summary="s", new_files=[code()])
 
 
 def test_an_implementation_with_a_test_is_accepted():
-    impl = Implementation(summary="s", files=[code(), a_test()])
-    assert len(impl.files) == 2
+    impl = Implementation(summary="s", new_files=[code(), a_test()])
+    assert len(impl.new_files) == 2
 
 
 @pytest.mark.parametrize("name", ["tests/test_mod.py", "src/pkg/mod_test.py"])
 def test_both_test_naming_conventions_count(name):
-    assert Implementation(summary="s", files=[code(), a_test(name)]).files
+    assert Implementation(summary="s", new_files=[code(), a_test(name)]).new_files
 
 
 def test_an_empty_implementation_is_refused():
-    with pytest.raises(ValidationError, match="at least one file"):
-        Implementation(summary="s", files=[])
+    with pytest.raises(ValidationError, match="create a file or edit one"):
+        Implementation(summary="s")
 
 
-def test_the_same_path_twice_is_refused():
-    """Each file is written in full, so a second write would silently win."""
-    with pytest.raises(ValidationError, match="written twice"):
-        Implementation(summary="s", files=[code(), a_test(), code()])
+def test_a_test_added_to_an_existing_file_satisfies_the_rule():
+    """A story extending a module usually adds cases, not a whole test file."""
+    from crew_org.crews.delivery_crew import FileEdit
+
+    impl = Implementation(
+        summary="s",
+        edits=[
+            FileEdit(path="src/m.py", operation="add", target="f", source="def f():\n    pass"),
+            FileEdit(
+                path="tests/test_m.py",
+                operation="add",
+                target="test_f",
+                source="def test_f():\n    assert True",
+            ),
+        ],
+    )
+    assert len(impl.edits) == 2
+
+
+def test_an_edit_without_source_is_refused_unless_deleting():
+    from crew_org.crews.delivery_crew import FileEdit
+
+    with pytest.raises(ValidationError, match="needs source"):
+        FileEdit(path="src/m.py", operation="replace", target="f")
+    assert FileEdit(path="src/m.py", operation="delete", target="f").target == "f"
+
+
+def test_an_edit_path_cannot_escape_the_repository():
+    from crew_org.crews.delivery_crew import FileEdit
+
+    with pytest.raises(ValidationError):
+        FileEdit(path="../../etc/passwd", operation="add", target="f", source="x = 1")

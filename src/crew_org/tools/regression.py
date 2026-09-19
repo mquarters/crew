@@ -95,6 +95,16 @@ def removed_public_names(before: str, after: str) -> set[str]:
     return public_names(before) - public_names(after)
 
 
+def overwrites_existing(worktree: Path, new_files: list) -> list[str]:
+    """New files that would overwrite something already there.
+
+    Writing an existing path as a "new file" is a whole-file rewrite by another
+    name — the exact thing editing by name exists to prevent — so it is refused
+    rather than merged.
+    """
+    return [f.path for f in new_files if (worktree / f.path).exists()]
+
+
 def find_regressions(
     worktree: Path, files: list, declared: set[str] | None = None
 ) -> dict[str, dict[str, set[str]]]:

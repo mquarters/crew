@@ -322,14 +322,28 @@ disappears silently. No other gate in the pipeline catches it.
 The prompt already forbade this and the model did it anyway on the first
 attempt. A prompt is a request; this is a guarantee.
 
-### Known limitation: whole-file rewrites do not scale
+### How the Developer returns work
 
-Every implementation re-emits the complete contents of every file it touches,
-so generation cost grows with the size of the module rather than the size of
-the change. A module that several stories have extended is re-emitted in full
-by each subsequent story, and the larger the re-emission the more room there is
-for exactly the drift these rules exist to catch.
+A file that does not exist yet is returned whole. A file that already exists is
+changed by **name**: the Developer names a definition and supplies its new
+source, and the applier splices it in. Nothing it does not name is reproduced,
+so nothing it does not name can be damaged.
 
-The fix is to emit only changed definitions and splice them in, which makes
-destruction structurally impossible rather than merely detected. It is not yet
-built. Expect it to matter once a module passes a few hundred lines.
+Operations are `replace`, `add`, `add_method`, `add_import` and `delete`.
+Deleting is something to choose, not something that happens by omission.
+
+This replaced whole-file rewriting, which failed for a reason worth recording.
+Returning a whole file makes every story a transcription exercise: regenerate
+three hundred lines, change four, leave the rest byte-identical. Story #8 could
+not do it — told not to delete, it stopped deleting and began silently altering
+six definitions instead, fixing whatever it was last told about and disturbing
+something adjacent each round.
+
+Published comparisons agree on why. Formats that require reproducing existing
+text — search/replace, unified diff — fail on transcription: eleven and
+thirty-one format failures respectively across four models, against **zero**
+for name-addressed edits. On a 4,200-line file, whole-file editing cost
+**18x the tokens and 12x the latency**. Aider separately measured a 30-50% rise
+in errors when models were pushed toward surgical line edits rather than whole
+functions, and a 9x rise without permissive parsing — so edits are whole
+definitions, and the applier corrects indentation rather than rejecting it.

@@ -294,20 +294,16 @@ def deliver_story(
             outcome.blocked_reason = decision.reason
             return outcome
 
-        # Checked before applying: a rewrite that deletes existing public names
-        # would otherwise be written to disk and only surface as other stories'
-        # tests failing to import, which reads as a coding error rather than as
-        # the regression it is.
-        regressions = regression.find_regressions(
-            worktree, implementation.files, declared=set(implementation.modifies)
-        )
-        if regressions:
+        # A "new file" that already exists is a whole-file rewrite wearing a
+        # different name, which is the thing editing by name exists to prevent.
+        overwrites = regression.overwrites_existing(worktree, implementation.new_files)
+        if overwrites:
             failure = LocalFailure(
                 card=number,
                 role="Developer",
                 failure_class=FailureClass.VERIFY,
                 attempts=outcome.attempts,
-                detail=regression.describe(regressions)[:400],
+                detail=f"would overwrite existing files: {', '.join(overwrites)}",
             )
             decision = policy.decide(failure, spent=ledger.spent(sprint))
             outcome.attempts += 1
@@ -316,33 +312,47 @@ def deliver_story(
                     kind=EventKind.ESCALATION_DECIDED,
                     role="Developer",
                     card=number,
-                    summary=f"REGRESSION — {decision.disposition}",
-                    detail={
-                        "failure_class": "REGRESSION",
-                        "attempt": outcome.attempts,
-                        "declared": sorted(implementation.modifies),
-                        "removed": {
-                            k: sorted(v["removed"]) for k, v in regressions.items() if v["removed"]
-                        },
-                        "altered": {
-                            k: sorted(v["altered"]) for k, v in regressions.items() if v["altered"]
-                        },
-                    },
+                    summary=f"OVERWRITE — {decision.disposition}",
+                    detail={"failure_class": "OVERWRITE", "paths": overwrites},
                 )
             )
             if decision.disposition is Disposition.RETRY_LOCAL:
-                feedback = regression.describe(regressions)
+                feedback = (
+                    f"These already exist: {', '.join(overwrites)}. Change them with "
+                    "`edits`, addressed by name, rather than rewriting them as new "
+                    "files. Only a file that does not exist yet belongs in new_files."
+                )
                 continue
-            lost = sorted(
-                n for kinds in regressions.values() for names in kinds.values() for n in names
-            )
-            outcome.blocked_reason = (
-                "the implementation kept rewriting existing code it had not declared: "
-                + ", ".join(lost)
-            )
+            outcome.blocked_reason = f"kept rewriting existing files: {', '.join(overwrites)}"
             return outcome
 
-        workspace.apply(worktree, implementation.files)
+        try:
+            workspace.apply_implementation(worktree, implementation)
+        except Exception as exc:  # noqa: BLE001
+            failure = LocalFailure(
+                card=number,
+                role="Developer",
+                failure_class=FailureClass.SCHEMA,
+                attempts=outcome.attempts,
+                detail=str(exc)[:400],
+            )
+            decision = policy.decide(failure, spent=ledger.spent(sprint))
+            outcome.attempts += 1
+            sink.emit(
+                CrewEvent(
+                    kind=EventKind.ESCALATION_DECIDED,
+                    role="Developer",
+                    card=number,
+                    summary=f"EDIT — {decision.disposition}",
+                    detail={"failure_class": "EDIT", "error": str(exc)[:400]},
+                )
+            )
+            if decision.disposition is Disposition.RETRY_LOCAL:
+                feedback = f"An edit could not be applied:\n\n{exc}"
+                continue
+            outcome.blocked_reason = f"edits could not be applied: {exc}"
+            return outcome
+
         check = workspace.check(worktree)
         if check.ok:
             break
@@ -427,7 +437,7 @@ def deliver_story(
                 kind=EventKind.AGENT_FINISHED,
                 role="Developer",
                 card=number,
-                summary=f"verified, not landed — {len(implementation.files)} files",
+                summary=f"verified, not landed — {_touched_count(implementation)} changes",
             )
         )
         return outcome
@@ -458,6 +468,10 @@ def deliver_story(
     return outcome
 
 
+def _touched_count(implementation: Implementation) -> int:
+    return len(implementation.new_files) + len(implementation.edits)
+
+
 def _pr_body(card: Card, implementation: Implementation, outcome: DeliveryOutcome) -> str:
     lines = [
         implementation.summary,
@@ -469,10 +483,13 @@ def _pr_body(card: Card, implementation: Implementation, outcome: DeliveryOutcom
         f"- attempts: {outcome.attempts + 1}",
         f"- escalated: {'yes' if outcome.escalated else 'no'}",
         "",
-        "## Files",
+        "## Changes",
         "",
     ]
-    lines += [f"- `{f.path}`" for f in implementation.files]
+    for new in implementation.new_files:
+        lines.append(f"- `{new.path}` (new)")
+    for edit in implementation.edits:
+        lines.append(f"- `{edit.path}` — {edit.operation} `{edit.target}`")
     lines += ["", f"Closes #{card.number}"]
     return "\n".join(lines)
 
