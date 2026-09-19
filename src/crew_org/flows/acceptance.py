@@ -21,6 +21,7 @@ from pathlib import Path
 from crew_org.columns import DONE, IN_PROGRESS, MERGING, QAING
 from crew_org.crews.qa_crew import QAVerdict, verify_story
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows import artifacts
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.tools import workspace
@@ -213,7 +214,14 @@ def run_qa(
         finally:
             ws.close()
 
-        issues.comment(repo, number, render_qa(verdict, revision))
+        artifacts.comment(
+            issues,
+            sink,
+            repo=repo,
+            number=number,
+            body=render_qa(verdict, revision),
+            by="QA Engineer",
+        )
 
         if verdict.accepted:
             move_card(

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from crew_org.columns import BLOCKED, DONE, MERGING
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows import artifacts
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
@@ -106,15 +107,22 @@ def merge_approved(
                 summary=f"merge conflict on PR #{pull['number']}",
                 kind=EventKind.CARD_BLOCKED,
             )
-            issues.add_labels(repo, number, ["blocked", "needs:human"])
-            issues.comment(
-                repo,
-                number,
-                f"**Blocked — merge conflict.** PR #{pull['number']} and `main` have both "
+            # No role decided this. Two changes disagree, so nothing is
+            # claimed — the same ruling #22 made for the card itself.
+            artifacts.label(
+                issues, sink, repo=repo, number=number, by=None, add=["blocked", "needs:human"]
+            )
+            artifacts.comment(
+                issues,
+                sink,
+                repo=repo,
+                number=number,
+                body=f"**Blocked — merge conflict.** PR #{pull['number']} and `main` have both "
                 "changed the same code, so landing it needs a decision the crew should "
                 "not make on its own.\n\n"
                 "Resolve the conflict on the branch, or close the pull request and let "
                 "the story be re-delivered from current `main`.",
+                by=None,
             )
             result.conflicted.append((number, pull["number"]))
             sink.emit(

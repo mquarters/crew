@@ -26,6 +26,7 @@ from crew_org.escalation import (
     utcnow,
 )
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows import artifacts
 from crew_org.flows.merge import merge_approved, ready_to_land
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
@@ -748,11 +749,14 @@ def deliver(
             )
             counts[IN_PROGRESS] -= 1
             counts[REVIEWING] = counts.get(REVIEWING, 0) + 1
-            issues.comment(
-                repo,
-                card.number or 0,
-                f"Implemented in #{outcome.pr} on `{outcome.branch}`. "
-                f"Lint and tests pass." + (" Escalated to finish." if outcome.escalated else ""),
+            artifacts.comment(
+                issues,
+                sink,
+                repo=repo,
+                number=card.number or 0,
+                body=f"Implemented in #{outcome.pr} on `{outcome.branch}`. Lint and tests pass."
+                + (" Escalated to finish." if outcome.escalated else ""),
+                by="Developer",
             )
             result.delivered.append(outcome)
         elif dry_run:
@@ -781,13 +785,18 @@ def deliver(
                 kind=EventKind.CARD_BLOCKED,
             )
             counts[IN_PROGRESS] -= 1
-            issues.add_labels(repo, card.number or 0, ["blocked"])
-            issues.comment(
-                repo,
-                card.number or 0,
-                f"**Blocked.** {outcome.blocked_reason}\n\n"
+            artifacts.label(
+                issues, sink, repo=repo, number=card.number or 0, by="Developer", add=["blocked"]
+            )
+            artifacts.comment(
+                issues,
+                sink,
+                repo=repo,
+                number=card.number or 0,
+                body=f"**Blocked.** {outcome.blocked_reason}\n\n"
                 f"Attempts: {outcome.attempts}. "
                 f"{'Escalated.' if outcome.escalated else 'Not escalated.'}",
+                by="Developer",
             )
             sink.emit(
                 CrewEvent(

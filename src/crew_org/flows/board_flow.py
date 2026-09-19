@@ -31,6 +31,7 @@ from crew_org.crews.refinement_crew import (
 )
 from crew_org.design import DesignPolicy, EpicShape
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows import artifacts
 from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace
 from crew_org.process import ProcessRules
@@ -245,7 +246,8 @@ def rework_gate(
             )
         )
     with contextlib.suppress(Exception):
-        issues.remove_label(repo, number, NEEDS_REWORK)
+        # The Sponsor's label, spent. Nobody's role to claim.
+        artifacts.label(issues, sink, repo=repo, number=number, by=None, remove=[NEEDS_REWORK])
     return True, sponsor_notes(issues, repo, number)
 
 
@@ -522,15 +524,24 @@ def refine_epics(
             )
         )
         if decision.required:
-            issues.add_labels(repo, number, [NEEDS_DESIGN])
+            artifacts.label(
+                issues, sink, repo=repo, number=number, by="Architect", add=[NEEDS_DESIGN]
+            )
             result.design_required.append(number)
 
-        issues.comment(repo, number, render_split(epic_card.title, proposal, decision, numbers))
+        artifacts.comment(
+            issues,
+            sink,
+            repo=repo,
+            number=number,
+            body=render_split(epic_card.title, proposal, decision, numbers),
+            by="Business Analyst",
+        )
 
         # Moving the card out of the gate *was* the approval. Leaving the label
         # on means the board keeps asking for a decision already made — the same
         # staleness the goal card had.
-        issues.remove_label(repo, number, NEEDS_HUMAN)
+        artifacts.label(issues, sink, repo=repo, number=number, by=None, remove=[NEEDS_HUMAN])
 
         result.epics_refined.append(number)
         sink.emit(
@@ -636,12 +647,19 @@ def tick(
         # The comment is written last, because it is also the idempotency
         # marker: if card creation fails halfway, the next tick retries rather
         # than recording work that did not happen.
-        issues.comment(repo, number, render_proposal(card.title, proposal, epic_numbers))
+        artifacts.comment(
+            issues,
+            sink,
+            repo=repo,
+            number=number,
+            body=render_proposal(card.title, proposal, epic_numbers),
+            by="Product Owner",
+        )
 
         # The decision has moved to the epics. Leaving needs:human on the goal
         # would show the Sponsor four things demanding attention when only
         # three do, and make the goal look like the card to move.
-        issues.remove_label(repo, number, NEEDS_HUMAN)
+        artifacts.label(issues, sink, repo=repo, number=number, by=None, remove=[NEEDS_HUMAN])
 
         result.proposed.append(number)
         sink.emit(
