@@ -27,9 +27,7 @@ def proxy(monkeypatch):
         if required and sent != f"Bearer {required}":
             return httpx.Response(401, json={"error": "no api key passed in"}, request=REQUEST)
         aliases = state.get("aliases", ["crew-local", "crew-code"])
-        return httpx.Response(
-            200, json={"data": [{"id": a} for a in aliases]}, request=REQUEST
-        )
+        return httpx.Response(200, json={"data": [{"id": a} for a in aliases]}, request=REQUEST)
 
     monkeypatch.setattr(httpx, "get", fake_get)
     monkeypatch.setenv("CREW_LLM_BASE_URL", URL)

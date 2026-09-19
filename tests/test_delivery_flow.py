@@ -331,9 +331,7 @@ def test_a_blocked_card_keeps_the_diff_that_failed(harness):
     is the only copy of what the Developer wrote. Losing it means the card
     blocks with no record of why."""
     failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
-    result, _, _, _, _, _ = harness(
-        checks=[red(), red(), red(), red()], escalate_result=failed
-    )
+    result, _, _, _, _, _ = harness(checks=[red(), red(), red(), red()], escalate_result=failed)
     assert result.blocked[0].rejected_diff is not None
     assert "what the model wrote" in result.blocked[0].rejected_diff
 
@@ -350,9 +348,7 @@ def test_a_blocked_card_keeps_the_whole_failure_report_not_an_extract(harness):
     the event log carries, and the part naming the defect is rarely the front."""
     long_output = "\n".join(f"FAILED tests/test_m.py::test_{i}" for i in range(80))
     failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
-    result, _, _, _, _, _ = harness(
-        checks=[red(long_output)] * 4, escalate_result=failed
-    )
+    result, _, _, _, _, _ = harness(checks=[red(long_output)] * 4, escalate_result=failed)
     detail = result.blocked[0].failure_detail
     assert detail is not None
     assert len(detail) > 400

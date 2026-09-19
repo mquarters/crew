@@ -214,19 +214,14 @@ def repository_context(worktree: Path, *, include_source: bool = False) -> str:
     from crew_org.tools.regression import signatures_for_context  # noqa: PLC0415
 
     paths = sorted(
-        p
-        for p in worktree.rglob("*")
-        if p.is_file()
-        and not (IGNORED_DIRS & set(p.parts))
+        p for p in worktree.rglob("*") if p.is_file() and not (IGNORED_DIRS & set(p.parts))
     )
 
     lines = ["### Files and what they define", ""]
     for path in paths[:MAX_CONTEXT_FILES]:
         rel = path.relative_to(worktree)
         if path.suffix == ".py":
-            signatures = signatures_for_context(
-                path.read_text(encoding="utf-8", errors="ignore")
-            )
+            signatures = signatures_for_context(path.read_text(encoding="utf-8", errors="ignore"))
             defined = (
                 ", ".join(f"{name}{sig}" for name, sig in sorted(signatures.items()))
                 if signatures

@@ -350,9 +350,7 @@ def render_signature(node: ast.stmt) -> str | None:
     """
     if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
         calling = [
-            name
-            for d in node.decorator_list
-            if (name := _decorator_name(d)) in CALLING_DECORATORS
+            name for d in node.decorator_list if (name := _decorator_name(d)) in CALLING_DECORATORS
         ]
         rendered = f"({', '.join(_parameters(node))})"
         return f"{rendered} [{calling[0]}]" if calling else rendered
