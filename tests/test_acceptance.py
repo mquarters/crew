@@ -65,6 +65,65 @@ def test_the_qa_comment_shows_what_was_not_proven():
     assert "test_empty_sprint_reports_unavailable" in body
 
 
+# --- what QA is shown ----------------------------------------------------
+
+
+def test_every_test_function_survives_collection(tmp_path):
+    """Story #13 was returned as unproven against two tests that were in the
+    file. A 12,000-character slice cut them off the end — new tests are
+    appended, so a head-slice lands on exactly the evidence QA needs."""
+    from crew_org.flows.acceptance import collect_tests
+
+    (tmp_path / "tests").mkdir()
+    body = "\n\n".join(f"def test_case_{i}():\n    assert {i} == {i}" for i in range(400))
+    (tmp_path / "tests/test_big.py").write_text(body)
+
+    collected = collect_tests(tmp_path)
+    assert len(body) > 12_000, "the fixture has to be big enough to have been cut"
+    for i in range(400):
+        assert f"def test_case_{i}()" in collected
+
+
+def test_a_test_file_that_does_not_fit_is_named_rather_than_halved(tmp_path):
+    """Half a test function reads as a test that checks less than it does."""
+    from crew_org.flows import acceptance
+
+    (tmp_path / "tests").mkdir()
+    for name in ("a", "b"):
+        (tmp_path / f"tests/test_{name}.py").write_text(
+            f"MARKER_{name} = 1\n" + f"# {name}\n" * 80_000
+        )
+    collected = acceptance.collect_tests(tmp_path)
+
+    assert len(collected) < acceptance.QA_CONTEXT_CHAR_CEILING * 2
+    assert "did not fit" in collected
+    assert "Do not conclude a criterion is untested" in collected
+    # Whichever file was dropped, it was dropped whole.
+    for name in ("a", "b"):
+        shown = f"MARKER_{name} = 1" in collected
+        named = f"tests/test_{name}.py" in collected
+        assert shown or named
+
+
+def test_the_end_of_a_run_is_what_survives(tmp_path):
+    """The summary and the failures are at the end. Delivery already learned
+    that keeping the front of a failure report keeps the wrong half."""
+    from dataclasses import dataclass
+
+    from crew_org.flows.acceptance import QA_OUTPUT_CHAR_CEILING, collect_output
+
+    @dataclass
+    class Result:
+        command: str
+        output: str
+
+    results = [Result("pytest -q", "x" * (QA_OUTPUT_CHAR_CEILING + 5_000) + "FAILED test_last")]
+    collected = collect_output(results)
+
+    assert "FAILED test_last" in collected
+    assert "earlier output trimmed" in collected
+
+
 # --- selection -----------------------------------------------------------
 
 

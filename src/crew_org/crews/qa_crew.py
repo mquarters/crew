@@ -72,8 +72,8 @@ def verify_story(story: str, *, test_output: str, test_code: str) -> QAVerdict:
     task = Task(
         description=(
             f"Verify this story against its acceptance criteria.\n\n{story}\n\n"
-            f"## The tests that were written\n\n```python\n{test_code[:12000]}\n```\n\n"
-            f"## What running the suite produced\n\n```\n{test_output[:4000]}\n```\n\n"
+            f"## The tests that were written\n\n```python\n{test_code}\n```\n\n"
+            f"## What running the suite produced\n\n```\n{test_output}\n```\n\n"
             "For each acceptance criterion, decide whether a test actually exercises it "
             "and name that test. A passing suite is not the same claim as a proven "
             "criterion — a test that exists but checks something adjacent proves nothing. "

@@ -26,6 +26,16 @@ from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 from crew_org.tools.sandbox import Sandbox
 
+# QA reasons about the test code, so what it is shown decides its verdict. A
+# 12,000-character slice in the prompt cut story #13's two new tests off the end
+# of a 13,839-character file, and QA correctly reported that it could not find
+# them. New tests are appended, so a head-slice lands on the evidence every
+# time. Whole files or a named omission — never a file cut mid-test.
+QA_CONTEXT_CHAR_CEILING = 200_000
+# The end of a test run is where the summary and the failures are. Keeping the
+# front of it is the same mistake delivery already learned not to make.
+QA_OUTPUT_CHAR_CEILING = 40_000
+
 IN_PROGRESS = "In Progress"
 AWAITING_QA = "Awaiting QA"
 AWAITING_APPROVAL = "Awaiting Approval"
@@ -78,13 +88,40 @@ def render_qa(verdict: QAVerdict) -> str:
 
 
 def collect_tests(worktree: Path) -> str:
-    """The test code, which is the evidence QA reasons about."""
-    parts = []
+    """The test code, which is the evidence QA reasons about.
+
+    Bounded here, where the files are still files, rather than by a slice of
+    the assembled string: a cut that lands inside a test function shows QA
+    half a test and no sign that there was more.
+    """
+    parts: list[str] = []
+    omitted: list[str] = []
+    budget = QA_CONTEXT_CHAR_CEILING
     for path in sorted(worktree.rglob("test_*.py")):
         if ".venv" in path.parts:
             continue
-        parts.append(f"# {path.relative_to(worktree)}\n{path.read_text()}")
+        rel = path.relative_to(worktree)
+        body = path.read_text(encoding="utf-8", errors="ignore")
+        if len(body) > budget:
+            omitted.append(str(rel))
+            continue
+        budget -= len(body)
+        parts.append(f"# {rel}\n{body}")
+    if omitted:
+        parts.append(
+            "# These test files exist and are not shown, because they did not fit: "
+            + ", ".join(omitted)
+            + ". Do not conclude a criterion is untested from their absence."
+        )
     return "\n\n".join(parts)
+
+
+def collect_output(results) -> str:
+    """What running the suite produced, keeping the end rather than the front."""
+    joined = "\n\n".join(f"$ {r.command}\n{r.output}" for r in results)
+    if len(joined) <= QA_OUTPUT_CHAR_CEILING:
+        return joined
+    return "…earlier output trimmed…\n" + joined[-QA_OUTPUT_CHAR_CEILING:]
 
 
 def run_qa(
@@ -119,7 +156,7 @@ def run_qa(
             check = workspace.check(worktree, sandbox=sandbox)
             verdict = verify_story(
                 f"{card.title}\n\n{issues.get(repo, number).get('body') or ''}",
-                test_output="\n\n".join(f"$ {r.command}\n{r.output}" for r in check.results)[:4000],
+                test_output=collect_output(check.results),
                 test_code=collect_tests(worktree),
             )
         except Exception as exc:  # noqa: BLE001
