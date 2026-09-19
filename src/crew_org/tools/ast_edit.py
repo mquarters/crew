@@ -113,9 +113,13 @@ def _import_insertion_point(tree: ast.Module, lines: list[str]) -> int:
     """After the last import, or after the module docstring, or the top."""
     last = 0
     for node in tree.body:
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            last = node.end_lineno or node.lineno
-        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and last == 0:
+        is_import = isinstance(node, ast.Import | ast.ImportFrom)
+        # A leading string expression is the module docstring — but only while
+        # nothing has been seen before it.
+        is_docstring = (
+            last == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+        )
+        if is_import or is_docstring:
             last = node.end_lineno or node.lineno
     return last
 

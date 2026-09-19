@@ -19,7 +19,9 @@ from crewai import LLM
 
 DEFAULT_BASE_URL = "http://localhost:4000/v1"
 
-# The proxy requires a value; the backend ignores it. This is not a credential.
+# Used when the proxy is running without a master key, where the backend
+# ignores the value entirely. A proxy started WITH LITELLM_MASTER_KEY rejects
+# it — set CREW_LLM_API_KEY to that key in .env.
 PLACEHOLDER_KEY = "sk-not-used"
 
 # Reasoning models need headroom ABOVE their thinking, and real refinement work
@@ -39,8 +41,25 @@ DEFAULT_MAX_TOKENS = 16384
 DEFAULT_TIMEOUT = 1800
 
 
+def _setting(name: str, default: str) -> str:
+    """A proxy setting, from the environment or `.env`.
+
+    `load_env` returns a dict rather than exporting, so reading os.environ
+    alone silently misses everything configured in `.env` and falls back to a
+    default. That was survivable while the default happened to be right; it is
+    not survivable for a credential, where being wrong is a 401.
+    """
+    from crew_org.config import load_env  # noqa: PLC0415
+
+    return os.environ.get(name) or load_env().get(name) or default
+
+
 def base_url() -> str:
-    return os.environ.get("CREW_LLM_BASE_URL", DEFAULT_BASE_URL)
+    return _setting("CREW_LLM_BASE_URL", DEFAULT_BASE_URL)
+
+
+def api_key() -> str:
+    return _setting("CREW_LLM_API_KEY", PLACEHOLDER_KEY)
 
 
 def build_llm(alias: str = "crew-local", **overrides: Any) -> LLM:
@@ -52,7 +71,7 @@ def build_llm(alias: str = "crew-local", **overrides: Any) -> LLM:
     params: dict[str, Any] = {
         "model": f"openai/{alias}",
         "base_url": base_url(),
-        "api_key": os.environ.get("CREW_LLM_API_KEY", PLACEHOLDER_KEY),
+        "api_key": api_key(),
         "max_tokens": DEFAULT_MAX_TOKENS,
         "timeout": DEFAULT_TIMEOUT,
     }
@@ -67,19 +86,37 @@ def health() -> tuple[bool, str]:
     and is not general infrastructure — so it will not always be running. A tick
     that fails on a dead proxy should say so plainly rather than surfacing a
     connection error from somewhere deep inside an agent.
+
+    "Down" and "up but rejecting the credential" need different answers, and
+    conflating them is expensive: a proxy started with LITELLM_MASTER_KEY
+    answers 401 to an unauthenticated probe, and reporting that as "not
+    answering" sends you to restart a container that is already healthy.
     """
     import httpx  # noqa: PLC0415
 
     url = base_url()
     try:
-        r = httpx.get(f"{url}/models", timeout=5.0)
-        r.raise_for_status()
+        r = httpx.get(
+            f"{url}/models",
+            headers={"Authorization": f"Bearer {api_key()}"},
+            timeout=5.0,
+        )
     except Exception:  # noqa: BLE001
         return False, (
             f"LiteLLM proxy is not answering at {url}.\n"
             "  Start it with:  cd deploy/litellm && "
             "SGLANG_BASE_URL=http://gx10-3703.local:8888/v1 docker compose up -d"
         )
+    if r.status_code in (401, 403):
+        return False, (
+            f"LiteLLM proxy is up at {url} but rejected the credential.\n"
+            "  It was started with LITELLM_MASTER_KEY, so the crew needs that key:\n"
+            "  set CREW_LLM_API_KEY in .env to the proxy's master key."
+        )
+    try:
+        r.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"LiteLLM proxy at {url} answered {r.status_code}: {exc}"
     aliases = [m["id"] for m in r.json().get("data", [])]
     if "crew-local" not in aliases:
         return False, f"Proxy is up but has no 'crew-local' alias. Serving: {aliases}"
