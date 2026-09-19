@@ -390,3 +390,50 @@ prompt describing what the agent could not see.
 are a different thing and stay: a file-size validator, a generation token
 limit, a cap on how many epics may be proposed. So do the short slices on
 event summaries and board comments — those are logs, not context.
+
+## 17. What a column means
+
+**Columns are queues.** A column names what a card is *waiting for*, never what
+is being done to it. A card enters one when the previous phase is finished with
+it and leaves when the phase that owns the column is finished in turn — so a
+card in `QAing` may be waiting for QA or being verified by it, and the board
+does not distinguish.
+
+```
+Inbox (Goals) → Needs Refinement → Ready → Sprint Backlog
+  → In Progress → Reviewing → QAing → Merging → Done
+```
+
+`Blocked` is not on that path. A card reaches it from anywhere and leaves only
+when a person has dealt with it.
+
+**Every phase drains its own column.** Delivery moves a card to `Reviewing`
+when it opens a pull request. Review moves it to `QAing` when the diff is
+approved and back to `In Progress` when changes are requested. QA moves it to
+`Merging` when every criterion is proven and back to `In Progress` when they
+are not. The merge lands it.
+
+A phase that reads the board without moving anything is invisible to the
+orchestrator. `crew review` was exactly that: it iterated GitHub's open pull
+requests, never touched the board, and so had no column and no WIP limit while
+the columns either side were capped at 3. A card's status could not tell you
+whether it had been reviewed.
+
+**The names describe the wait, not the actor.** `Merging` rather than
+`Approving`: a card arrives there after QA accepts, and its approving review was
+given back in `Reviewing`, so all that remains is the merge. Naming a column for
+a step that has already happened is how `In Review` and `QA` came to describe
+something other than their contents.
+
+**This is a choice, and the alternative is a real one.** A pull system would
+give each role a lane it claims work into, making in-flight work visible and
+giving WIP limits something more precise to cap. Queues were chosen because
+they match what the flows already do and because the board is a Sponsor's view
+of what is waiting, not a worklist. Whichever is chosen, it has to be written
+down: two conventions ran side by side here for months precisely because nothing
+said which one was the model.
+
+**Column names live in `crew_org.columns` and nowhere else.** They were
+duplicated as string constants across five flow modules, so renaming two of them
+took a commit touching all five — and left the board's own automations pointing
+at options that no longer existed.

@@ -146,9 +146,15 @@ def _review(crew: Crew, *, dry_run: bool) -> PhaseOutcome:
 
     moved_any = False
     reviewed = skipped = 0
+    cards = crew.board.cards()
     for repo in sorted(crew.repos):
         result = review_open_pulls(
-            crew.reviewer, crew.sink, repo=repo, bot_login=crew.reviewer_login
+            crew.reviewer,
+            crew.sink,
+            repo=repo,
+            bot_login=crew.reviewer_login,
+            board=crew.board,
+            cards=cards,
         )
         reviewed += len(result.reviewed)
         skipped += len(result.skipped)

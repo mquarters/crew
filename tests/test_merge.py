@@ -17,7 +17,7 @@ APPROVED = [{"state": "APPROVED"}]
 COMMENTED = [{"state": "COMMENTED"}]
 
 
-def card(number: int, status: str = "Awaiting Approval", repo: str = "sprint-metrics") -> Card:
+def card(number: int, status: str = "Merging", repo: str = "sprint-metrics") -> Card:
     return Card(
         item_id=f"C{number}",
         number=number,
@@ -82,7 +82,7 @@ def run(cards, issues, repos=None):
 
 
 def test_only_stories_that_passed_qa_are_landed():
-    cards = [card(6), card(7, status="Awaiting QA"), card(8, status="Done")]
+    cards = [card(6), card(7, status="QAing"), card(8, status="Done")]
     assert [c.number for c in ready_to_land(cards)] == [6]
 
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass, field
 
+from crew_org.columns import INBOX, READY
+from crew_org.columns import NEEDS_REFINEMENT as REFINEMENT
 from crew_org.config import load_org
 from crew_org.crews.refinement_crew import (
     Epic,
@@ -43,9 +45,6 @@ EPIC_PROPOSAL_MARKER = "<!-- crew:epic-proposal -->"
 
 STORY_SPLIT_MARKER = "<!-- crew:story-split -->"
 
-INBOX = "Inbox (Goals)"
-REFINEMENT = "Needs Refinement"
-READY = "Ready"
 GOAL_TYPE = "Goal"
 EPIC_TYPE = "Epic"
 STORY_TYPE = "Story"

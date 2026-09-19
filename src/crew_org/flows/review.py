@@ -10,9 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from crew_org.columns import IN_PROGRESS, QAING, REVIEWING
 from crew_org.crews.review_crew import ReviewVerdict, review_diff
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
+from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
+from crew_org.tools.github_project import Card, ProjectClient
 
 REVIEW_MARKER = "<!-- crew:review -->"
 
@@ -56,15 +60,41 @@ def already_reviewed(reviews: list[dict], bot_login: str) -> bool:
     )
 
 
+def cards_by_branch(cards: list[Card]) -> dict[str, Card]:
+    """The cards waiting for review, indexed by the branch carrying their work.
+
+    Review reads pull requests rather than the board, deliberately: a human's
+    change is reviewed on the same terms as the crew's, and a human's change has
+    no card. So the board is what a verdict is applied *to*, not what is
+    iterated — a pull request with no card is still reviewed, and simply moves
+    nothing.
+    """
+    return {
+        branch_name(c.number or 0, c.title): c
+        for c in cards
+        if c.status == REVIEWING and c.state != "CLOSED"
+    }
+
+
 def review_open_pulls(
     issues: IssueClient,
     sink: EventSink,
     *,
     repo: str,
     bot_login: str,
+    board: ProjectClient | None = None,
+    cards: list[Card] | None = None,
 ) -> ReviewResult:
-    """Review every open pull request that the crew has not yet judged."""
+    """Review every open pull request that the crew has not yet judged.
+
+    Moves the card a pull request belongs to out of `Reviewing`: on to `QAing`
+    when the diff is approved, back to `In Progress` when changes are requested.
+    A queue a phase never drains is not a queue, and until this existed review
+    was the one phase that read the board without ever touching it — invisible
+    to the orchestrator, and uncapped while the columns either side were not.
+    """
     result = ReviewResult()
+    waiting = cards_by_branch(cards or []) if board is not None else {}
 
     for pull in issues.open_pulls(repo):
         number = pull["number"]
@@ -125,5 +155,34 @@ def review_open_pulls(
                 summary=f"{event} — {len(verdict.findings)} findings",
             )
         )
+
+        card = waiting.get(pull.get("head", {}).get("ref", ""))
+        if card is not None and board is not None:
+            # A COMMENT verdict is the crew reviewing its own pull request,
+            # which GitHub will not let it approve. That is not a judgement, so
+            # the card stays where it is rather than being moved on an opinion
+            # nobody was allowed to record.
+            if event == "APPROVE":
+                move_card(
+                    board,
+                    sink,
+                    item_id=card.item_id,
+                    to=QAING,
+                    by="Code Reviewer",
+                    card=card.number,
+                    frm=REVIEWING,
+                    summary="diff approved",
+                )
+            elif event == "REQUEST_CHANGES":
+                move_card(
+                    board,
+                    sink,
+                    item_id=card.item_id,
+                    to=IN_PROGRESS,
+                    by="Code Reviewer",
+                    card=card.number,
+                    frm=REVIEWING,
+                    summary=f"changes requested — {len(verdict.findings)} findings",
+                )
 
     return result

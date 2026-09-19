@@ -12,15 +12,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from crew_org.columns import INBOX, READY, SPRINT_BACKLOG
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.moves import move_card
 from crew_org.process import ProcessRules
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
-READY = "Ready"
-SPRINT_BACKLOG = "Sprint Backlog"
-INBOX = "Inbox (Goals)"
 EPIC_TYPE = "Epic"
 STORY_TYPE = "Story"
 

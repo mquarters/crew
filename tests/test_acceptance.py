@@ -140,7 +140,7 @@ def story(number: int, status: str, work_type: str = "Story") -> Card:
 
 
 def test_only_stories_awaiting_qa_are_verified():
-    cards = [story(6, "Awaiting QA"), story(7, "Sprint Backlog"), story(3, "Awaiting QA", "Epic")]
+    cards = [story(6, "QAing"), story(7, "Sprint Backlog"), story(3, "QAing", "Epic")]
     assert [c.number for c in awaiting_qa(cards)] == [6]
 
 
@@ -191,7 +191,7 @@ def test_a_parent_closing_claims_the_card_for_nobody():
 
 def test_one_open_story_keeps_the_epic_open():
     """Close enough is not done."""
-    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, "Awaiting Approval")]
+    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, "Merging")]
     issues = FakeIssues({3: [{"number": 6}, {"number": 7}]})
     board = FakeBoard()
     assert close_finished_parents(board, issues, EventSink(None), cards, repo="r") == []

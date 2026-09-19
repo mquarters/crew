@@ -223,10 +223,10 @@ def _synthetic_tick(sink: EventSink) -> None:
     emit(EventKind.AGENT_FINISHED, "PR #31 opened", "Developer", 7)
     emit(
         EventKind.CARD_MOVED,
-        "to Awaiting QA",
+        "to QAing",
         "Developer",
         7,
-        **{"from": "In Progress", "to": "Awaiting QA"},
+        **{"from": "In Progress", "to": "QAing"},
     )
 
     emit(EventKind.AGENT_STARTED, "design pagination strategy", "Architect", 9)
@@ -366,7 +366,7 @@ def auth() -> None:
 
     # The reviewing identity is checked for one thing only: that it is somebody
     # else. An app cannot approve a pull request it opened, so a reviewer that
-    # resolves to the delivery app leaves every story in Awaiting Approval.
+    # resolves to the delivery app leaves every story in Merging.
     try:
         review_token, review_identity = resolve_credentials(env, prefix=REVIEW_APP_PREFIX)
     except Exception as exc:  # noqa: BLE001
@@ -459,6 +459,7 @@ def review(
     from crew_org.flows.review import review_open_pulls
     from crew_org.llm import health
     from crew_org.tools.github_issues import IssueClient
+    from crew_org.tools.github_project import ProjectClient
 
     ok, message = health()
     if not ok:
@@ -474,7 +475,17 @@ def review(
 
     console.print(f"[dim]acting as {escape(identity)} · reviewing {owner}/{repo}[/]")
     sink = EventSink(VAR / "events" / "review.jsonl")
-    result = review_open_pulls(IssueClient(token, owner), sink, repo=repo, bot_login=identity)
+    # The board moves with the verdict: a card leaves Reviewing for QAing or
+    # goes back to In Progress. A pull request with no card still gets reviewed.
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    result = review_open_pulls(
+        IssueClient(token, owner),
+        sink,
+        repo=repo,
+        bot_login=identity,
+        board=board,
+        cards=board.cards(),
+    )
 
     console.print()
     for outcome in result.reviewed:

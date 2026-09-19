@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from crew_org.columns import DONE, MERGING
 from crew_org.crews.retro_crew import Retro, write_retro
 from crew_org.escalation import EscalationLedger
 from crew_org.events import EventKind, EventSink
@@ -18,8 +19,6 @@ from crew_org.git_ops import branch_name
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
 
-AWAITING_APPROVAL = "Awaiting Approval"
-DONE = "Done"
 STORY_TYPE = "Story"
 
 
@@ -68,7 +67,7 @@ def close_sprint(
         number = card.number or 0
         if card.status == DONE:
             continue
-        if card.status != AWAITING_APPROVAL:
+        if card.status != MERGING:
             result.still_open.append(number)
             continue
 
@@ -102,7 +101,7 @@ def close_sprint(
             to=DONE,
             by=None,
             card=number,
-            frm=AWAITING_APPROVAL,
+            frm=MERGING,
             summary=f"merged PR #{pull['number']}",
         )
         result.merged.append(number)
