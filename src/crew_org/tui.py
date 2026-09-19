@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from crew_org.columns import BLOCKED
 from crew_org.events import CrewEvent, EventKind, EventSink
 
 _ACTIVITY_START = {EventKind.AGENT_STARTED, EventKind.TASK_STARTED}
@@ -69,6 +70,16 @@ class LiveView:
     # --- state ---------------------------------------------------------
     def handle(self, event: CrewEvent) -> None:
         self.events.append(event)
+
+        # Seed from the real board whenever an event carries it. Without this
+        # the lanes start at zero and only ever move by the deltas below, so
+        # what the panel showed was net card movements observed by this process
+        # drawn in the shape of a board — reading zero across the row while 46
+        # cards sat there. set_board existed for exactly this and nothing called
+        # it.
+        counts = event.detail.get("counts")
+        if isinstance(counts, dict):
+            self.set_board(counts, blocked=int(counts.get(BLOCKED, 0)))
 
         if event.kind is EventKind.TICK_STARTED:
             self.tick = int(event.detail.get("tick", self.tick + 1))
