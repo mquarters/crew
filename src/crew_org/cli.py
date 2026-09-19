@@ -440,10 +440,12 @@ def qa() -> None:
         console.print(f"[yellow]#{outcome.card}[/] returned — {outcome.unproven} criteria unproven")
     for number, why in result.failed:
         console.print(f"[red]#{number}[/] {why}")
+    for number, why in result.skipped:
+        console.print(f"[dim]#{number}[/] {why}")
     for number in result.parents_closed:
         console.print(f"[green]#{number}[/] closed — all children done")
-    if not (result.verified or result.returned or result.failed):
-        console.print("[dim]Nothing awaiting QA.[/]")
+    if not (result.verified or result.returned or result.failed or result.skipped):
+        console.print("[dim]Nothing in QAing.[/]")
 
 
 @app.command()

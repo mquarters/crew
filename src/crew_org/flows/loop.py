@@ -175,10 +175,11 @@ def _qa(crew: Crew, *, dry_run: bool) -> PhaseOutcome:
         crew.board, crew.issues, crew.sink, crew.board.cards(), repo=crew.repo
     )
     moved = bool(result.verified or result.returned or result.parents_closed)
+    skipped = f", {len(result.skipped)} already judged" if result.skipped else ""
     return PhaseOutcome(
         "qa",
         moved=moved,
-        summary=f"{len(result.verified)} accepted, {len(result.returned)} returned",
+        summary=f"{len(result.verified)} accepted, {len(result.returned)} returned{skipped}",
         result=result,
     )
 

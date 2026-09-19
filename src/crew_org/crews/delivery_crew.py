@@ -182,11 +182,21 @@ STANDING_INSTRUCTIONS = (
 )
 
 
-def implement_story(story: str, *, context: str, feedback: str = "") -> Implementation:
+def implement_story(
+    story: str, *, context: str, feedback: str = "", prior: str = ""
+) -> Implementation:
     """Produce the files that satisfy one story.
 
     `feedback` carries the previous attempt's failure, so a repair sees what
     went wrong instead of starting blind.
+
+    `prior` carries what the Code Reviewer and QA said the last time this story
+    was delivered — a different thing entirely. A returned card is delivered
+    again from a clean worktree (`worktree add -B ... origin/HEAD`), so that
+    work is *not* in the files and must not be described as if it were. Without
+    it the crew returns a card for a named defect and then implements it again
+    knowing nothing about the defect, which is how a story is returned twice for
+    the same reason.
     """
     agents = build_agents("developer")
     repair = (
@@ -212,11 +222,24 @@ def implement_story(story: str, *, context: str, feedback: str = "") -> Implemen
     # instructions are identical for every story and every repair, so they go
     # first; the story varies per card, the repository per attempt, and the
     # failure most of all. Measured cache hit rate before reordering: 31%.
+    # Ordered stable-first for the prefix cache, then by how much each part
+    # varies: the story is fixed for this card, what the gates said is fixed for
+    # this delivery, the repository changes per attempt, the failure most of all.
+    previously = (
+        "\n\n## What the gates said last time this story was delivered\n\n"
+        f"{prior}\n\n"
+        "That work is **not** in the repository below — a returned story is "
+        "delivered again from a clean branch. Treat this as what went wrong "
+        "before, and do not repeat it.\n"
+        if prior
+        else ""
+    )
     task = Task(
         description=(
             STANDING_INSTRUCTIONS
-            + f"\n\n## The story\n\n{story}\n\n"
-            + f"## The repository as it stands\n\n{context}\n"
+            + f"\n\n## The story\n\n{story}\n"
+            + previously
+            + f"\n## The repository as it stands\n\n{context}\n"
             + repair
         ),
         expected_output=(
