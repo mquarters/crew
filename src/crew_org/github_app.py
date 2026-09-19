@@ -40,24 +40,32 @@ class AppCredentials:
     installation_id: str | None = None
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> AppCredentials | None:
-        """Read app credentials, or return None if the crew is still on a PAT."""
+    def from_env(
+        cls, env: dict[str, str] | None = None, *, prefix: str = "GITHUB_APP_"
+    ) -> AppCredentials | None:
+        """Read app credentials, or return None if this app is not configured.
+
+        `prefix` selects which app. The crew has two identities because GitHub
+        will not let an app approve a pull request it opened: the delivery app
+        writes the code, and a second app reviews it. One app meant
+        `merge_approved` waited on an APPROVED review that could never arrive.
+        """
         env = env if env is not None else dict(os.environ)
-        app_id = env.get("GITHUB_APP_ID")
-        key_path = env.get("GITHUB_APP_PRIVATE_KEY")
+        app_id = env.get(f"{prefix}ID")
+        key_path = env.get(f"{prefix}PRIVATE_KEY")
         if not app_id or not key_path:
             return None
 
         path = Path(key_path).expanduser()
         if not path.exists():
             raise AppAuthError(
-                f"GITHUB_APP_PRIVATE_KEY points at {path}, which does not exist. "
+                f"{prefix}PRIVATE_KEY points at {path}, which does not exist. "
                 "Download the app's private key and place it there (it is gitignored)."
             )
         return cls(
             app_id=app_id,
             private_key=path.read_text(encoding="utf-8"),
-            installation_id=env.get("GITHUB_APP_INSTALLATION_ID") or None,
+            installation_id=env.get(f"{prefix}INSTALLATION_ID") or None,
         )
 
 

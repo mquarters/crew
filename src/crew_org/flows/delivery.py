@@ -13,7 +13,6 @@ SCOPE failure means the story was not ready and goes back to refinement.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from crew_org.crews.delivery_crew import Implementation, implement_story
 from crew_org.escalation import (
@@ -27,28 +26,19 @@ from crew_org.escalation import (
 )
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.merge import merge_approved
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.process import ProcessRules
 from crew_org.tools import claude_code, regression, workspace
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
+from crew_org.tools.repo_context import repository_context
 
 SPRINT_BACKLOG = "Sprint Backlog"
 IN_PROGRESS = "In Progress"
 AWAITING_QA = "Awaiting QA"
 BLOCKED = "Blocked"
 STORY_TYPE = "Story"
-
-# Files worth showing the Developer so it writes code that fits in.
-CONTEXT_FILES = ("pyproject.toml", "README.md")
-MAX_CONTEXT_FILES = 40
-# Source and tests are shown in full on a repair, bounded so a large tree does
-# not crowd out the failure itself.
-MAX_SOURCE_CHARS = 20_000
-# Tool droppings. They tell the Developer nothing and they are not free: the
-# file listing is capped, so eleven cache entries are eleven real files the
-# model never gets shown.
-IGNORED_DIRS = frozenset({".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"})
 
 
 @dataclass
@@ -100,6 +90,11 @@ class DeliveryResult:
     not_ours: list[int] = field(default_factory=list)
     landed: list[int] = field(default_factory=list)
     conflicted: list[int] = field(default_factory=list)
+    # Why a story that was ready to land did not. merge_approved has always
+    # worked these out and the command printed neither, so a run that silently
+    # skipped every merge looked exactly like a run with nothing to merge.
+    awaiting_approval: list[tuple[int, int]] = field(default_factory=list)
+    unmergeable: list[tuple[int, str]] = field(default_factory=list)
     rate_limited: bool = False
 
 
@@ -134,27 +129,29 @@ def reconcile_orphans(
         number = card.number or 0
         branch = branch_name(number, card.title)
         if branch in open_prs:
-            board.set_status(card.item_id, AWAITING_QA)
-            sink.emit(
-                CrewEvent(
-                    kind=EventKind.CARD_MOVED,
-                    card=number,
-                    summary=f"already has PR #{open_prs[branch]} — moved to review",
-                    **{"from": IN_PROGRESS, "to": AWAITING_QA},
-                )
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_QA,
+                by=None,
+                card=number,
+                frm=IN_PROGRESS,
+                summary=f"already has PR #{open_prs[branch]} — moved to review",
             )
             continue
 
-        board.set_status(card.item_id, SPRINT_BACKLOG)
-        recovered.append(number)
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                card=number,
-                summary="stranded In Progress with no PR — returned to the backlog",
-                **{"from": IN_PROGRESS, "to": SPRINT_BACKLOG},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=SPRINT_BACKLOG,
+            by=None,
+            card=number,
+            frm=IN_PROGRESS,
+            summary="stranded In Progress with no PR — returned to the backlog",
         )
+        recovered.append(number)
     return recovered
 
 
@@ -190,78 +187,6 @@ def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
         and (c.sprint == sprint or sprint is None)
         and c.repo not in repos
     ]
-
-
-def repository_context(worktree: Path, *, include_source: bool = False) -> str:
-    """What the repository looks like, and what each file defines.
-
-    Editing works by name, so the names are the context that matters. Listing
-    them is a few hundred tokens that stay identical between attempts, where
-    dumping file bodies was thousands that changed every time — which both
-    poisoned the prefix cache and left the model guessing at targets it had
-    never been shown. Both EDIT failures on story #8 were invented names.
-
-    The names carry their signatures, because a name alone does not say that
-    `is_completed` is a property or that `format_performance_table` takes
-    `(cards, wip_limits)`. Story #9 changed both and broke thirteen tests, and
-    it had never been shown either contract — it was refused for violating a
-    rule nobody had told it. Signatures cost a few tokens more and are just as
-    stable between attempts, so the cacheable prefix is unaffected.
-
-    `include_source` adds the bodies on a repair, where seeing the actual code
-    is worth the churn.
-    """
-    from crew_org.tools.regression import signatures_for_context  # noqa: PLC0415
-
-    paths = sorted(
-        p for p in worktree.rglob("*") if p.is_file() and not (IGNORED_DIRS & set(p.parts))
-    )
-
-    lines = ["### Files and what they define", ""]
-    for path in paths[:MAX_CONTEXT_FILES]:
-        rel = path.relative_to(worktree)
-        if path.suffix == ".py":
-            signatures = signatures_for_context(path.read_text(encoding="utf-8", errors="ignore"))
-            defined = (
-                ", ".join(f"{name}{sig}" for name, sig in sorted(signatures.items()))
-                if signatures
-                else "nothing at top level"
-            )
-            lines.append(f"- `{rel}` — {defined}")
-        else:
-            lines.append(f"- `{rel}`")
-    if len(paths) > MAX_CONTEXT_FILES:
-        lines.append(f"- … and {len(paths) - MAX_CONTEXT_FILES} more")
-
-    lines += [
-        "",
-        "Target an existing definition by the names above. `Class.method` for a "
-        "method. A file is not a definition: to change what a package exports, "
-        "edit `__all__`, not `__init__`.",
-        "",
-        "The signatures above are what merged code already calls. Change a "
-        "body as freely as the story needs, but keep every parameter list, "
-        "every `[property]`, and every existing definition — if this story "
-        "needs something the current shape cannot express, add a new "
-        "definition beside it rather than reshaping the old one.",
-    ]
-
-    for name in CONTEXT_FILES:
-        target = worktree / name
-        if target.exists():
-            lines += ["", f"### {name}", "", "```", target.read_text()[:2000].strip(), "```"]
-
-    if include_source:
-        lines += ["", "### Current source", ""]
-        budget = MAX_SOURCE_CHARS
-        for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
-            if ".venv" in target.parts or budget <= 0:
-                continue
-            body = target.read_text()[:budget]
-            budget -= len(body)
-            lines += [f"`{target.relative_to(worktree)}`", "", "```python", body.strip(), "```", ""]
-
-    return "\n".join(lines)
 
 
 def escalation_prompt(story: str, failure: str) -> str:
@@ -313,7 +238,7 @@ def deliver_story(
     while True:
         # Recomputed every pass: a repair must see the files it just wrote, or
         # it is fixing code it cannot read.
-        context = repository_context(worktree, include_source=bool(feedback))
+        context = repository_context(worktree)
         try:
             implementation = implement_story(story_text, context=context, feedback=feedback)
         except Exception as exc:  # noqa: BLE001
@@ -618,6 +543,8 @@ def deliver(
     landed = merge_approved(board, issues, sink, cards=cards, default_repo=repo, repos=repos)
     result.landed = [card for card, _pr in landed.merged]
     result.conflicted = [card for card, _pr in landed.conflicted]
+    result.awaiting_approval = list(landed.awaiting_approval)
+    result.unmergeable = list(landed.failed)
     if landed.merged or landed.conflicted:
         cards = board.cards()
 
@@ -646,17 +573,17 @@ def deliver(
             sink.note(EventKind.NOTE, verdict.reason)
             break
 
-        board.set_status(card.item_id, IN_PROGRESS)
-        counts[IN_PROGRESS] = counts.get(IN_PROGRESS, 0) + 1
-        sink.emit(
-            CrewEvent(
-                kind=EventKind.CARD_MOVED,
-                role="Developer",
-                card=card.number,
-                summary=card.title[:60],
-                **{"from": SPRINT_BACKLOG, "to": IN_PROGRESS},
-            )
+        move_card(
+            board,
+            sink,
+            item_id=card.item_id,
+            to=IN_PROGRESS,
+            by="Developer",
+            card=card.number,
+            frm=SPRINT_BACKLOG,
+            summary=card.title[:60],
         )
+        counts[IN_PROGRESS] = counts.get(IN_PROGRESS, 0) + 1
 
         # The card names its own repository. Using a global default would
         # implement a card belonging to one repo inside another, silently.
@@ -695,13 +622,31 @@ def deliver(
 
         if outcome.ok and dry_run:
             # Put the card back: a dry run must leave the board as it found it.
-            board.set_status(card.item_id, SPRINT_BACKLOG)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=SPRINT_BACKLOG,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary="dry run — verified, nothing landed",
+            )
             counts[IN_PROGRESS] -= 1
             result.delivered.append(outcome)
             continue
 
         if outcome.ok:
-            board.set_status(card.item_id, AWAITING_QA)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_QA,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary=f"delivered — PR #{outcome.pr}",
+            )
             counts[IN_PROGRESS] -= 1
             counts[AWAITING_QA] = counts.get(AWAITING_QA, 0) + 1
             issues.comment(
@@ -712,11 +657,30 @@ def deliver(
             )
             result.delivered.append(outcome)
         elif dry_run:
-            board.set_status(card.item_id, SPRINT_BACKLOG)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=SPRINT_BACKLOG,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary="dry run — not verified, nothing landed",
+            )
             counts[IN_PROGRESS] -= 1
             result.blocked.append(outcome)
         else:
-            board.set_status(card.item_id, BLOCKED)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=BLOCKED,
+                by="Developer",
+                card=card.number,
+                frm=IN_PROGRESS,
+                summary=(outcome.blocked_reason or "")[:80],
+                kind=EventKind.CARD_BLOCKED,
+            )
             counts[IN_PROGRESS] -= 1
             issues.add_labels(repo, card.number or 0, ["blocked"])
             issues.comment(

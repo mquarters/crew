@@ -65,6 +65,65 @@ def test_the_qa_comment_shows_what_was_not_proven():
     assert "test_empty_sprint_reports_unavailable" in body
 
 
+# --- what QA is shown ----------------------------------------------------
+
+
+def test_every_test_function_survives_collection(tmp_path):
+    """Story #13 was returned as unproven against two tests that were in the
+    file. A 12,000-character slice cut them off the end — new tests are
+    appended, so a head-slice lands on exactly the evidence QA needs."""
+    from crew_org.flows.acceptance import collect_tests
+
+    (tmp_path / "tests").mkdir()
+    body = "\n\n".join(f"def test_case_{i}():\n    assert {i} == {i}" for i in range(400))
+    (tmp_path / "tests/test_big.py").write_text(body)
+
+    collected = collect_tests(tmp_path)
+    assert len(body) > 12_000, "the fixture has to be big enough to have been cut"
+    for i in range(400):
+        assert f"def test_case_{i}()" in collected
+
+
+def test_evidence_that_does_not_fit_refuses_a_verdict(tmp_path):
+    """QAVerdict has no way to say "I could not see enough to tell", so a
+    partial view has to resolve to proven or unproven and both are false. The
+    run fails loudly instead, and says which file it got to."""
+    import pytest as _pytest
+
+    from crew_org.flows import acceptance
+
+    # Sized off the ceiling, so raising the guard does not quietly stop this
+    # from testing the guard. Two files, each just over half of it.
+    filler_lines = acceptance.QA_CONTEXT_CHAR_CEILING // 8
+    (tmp_path / "tests").mkdir()
+    for name in ("a", "b"):
+        (tmp_path / f"tests/test_{name}.py").write_text(
+            f"MARKER_{name} = 1\n" + f"# {name}\n" * filler_lines
+        )
+
+    with _pytest.raises(acceptance.EvidenceTooLarge, match="tests/test_b.py"):
+        acceptance.collect_tests(tmp_path)
+
+
+def test_the_end_of_a_run_is_what_survives(tmp_path):
+    """The summary and the failures are at the end. Delivery already learned
+    that keeping the front of a failure report keeps the wrong half."""
+    from dataclasses import dataclass
+
+    from crew_org.flows.acceptance import QA_OUTPUT_CHAR_CEILING, collect_output
+
+    @dataclass
+    class Result:
+        command: str
+        output: str
+
+    results = [Result("pytest -q", "x" * (QA_OUTPUT_CHAR_CEILING + 5_000) + "FAILED test_last")]
+    collected = collect_output(results)
+
+    assert "FAILED test_last" in collected
+    assert "earlier output trimmed" in collected
+
+
 # --- selection -----------------------------------------------------------
 
 
@@ -91,9 +150,13 @@ def test_only_stories_awaiting_qa_are_verified():
 class FakeBoard:
     def __init__(self):
         self.moves = []
+        self.owners = []
 
     def set_status(self, item_id, column):
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
 
 
 class FakeIssues:
@@ -111,6 +174,19 @@ def test_an_epic_closes_when_all_its_stories_are_done():
     closed = close_finished_parents(board, issues, EventSink(None), cards, repo="r")
     assert closed == [3]
     assert ("C3", DONE) in board.moves
+
+
+def test_a_parent_closing_claims_the_card_for_nobody():
+    """Bookkeeping, not judgement. An epic whose children are all done closes
+    itself, so the card keeps whichever role last actually worked on it rather
+    than being attributed to one that did not act."""
+    cards = [story(3, "Needs Refinement", "Epic"), story(6, DONE), story(7, DONE)]
+    issues = FakeIssues({3: [{"number": 6}, {"number": 7}]})
+    board = FakeBoard()
+    close_finished_parents(board, issues, EventSink(None), cards, repo="r")
+
+    assert ("C3", DONE) in board.moves
+    assert board.owners == []
 
 
 def test_one_open_story_keeps_the_epic_open():

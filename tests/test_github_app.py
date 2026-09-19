@@ -54,6 +54,35 @@ def test_credentials_load_from_disk(tmp_path, private_key):
     assert creds is not None and creds.app_id == "42"
 
 
+def test_a_prefix_selects_a_different_app(tmp_path, private_key):
+    """The crew reviews as a second app because GitHub refuses an approval from
+    the identity that opened the pull request."""
+    delivery = tmp_path / "delivery.pem"
+    delivery.write_text(private_key)
+    reviewer = tmp_path / "reviewer.pem"
+    reviewer.write_text(private_key)
+    env = {
+        "GITHUB_APP_ID": "42",
+        "GITHUB_APP_PRIVATE_KEY": str(delivery),
+        "GITHUB_REVIEW_APP_ID": "99",
+        "GITHUB_REVIEW_APP_PRIVATE_KEY": str(reviewer),
+        "GITHUB_REVIEW_APP_INSTALLATION_ID": "7",
+    }
+    assert AppCredentials.from_env(env).app_id == "42"
+    review = AppCredentials.from_env(env, prefix="GITHUB_REVIEW_APP_")
+    assert review is not None
+    assert review.app_id == "99"
+    assert review.installation_id == "7"
+
+
+def test_an_unconfigured_prefix_is_none_rather_than_the_default(tmp_path, private_key):
+    """Falling back is resolve_credentials' decision to make, not this one's."""
+    path = tmp_path / "key.pem"
+    path.write_text(private_key)
+    env = {"GITHUB_APP_ID": "42", "GITHUB_APP_PRIVATE_KEY": str(path)}
+    assert AppCredentials.from_env(env, prefix="GITHUB_REVIEW_APP_") is None
+
+
 # --- signing -------------------------------------------------------------
 
 

@@ -54,6 +54,7 @@ def tick(
     from crew_org.auth import resolve_credentials
     from crew_org.config import load_env
     from crew_org.flows.board_flow import tick as run_tick
+    from crew_org.git_ops import Workspace
     from crew_org.llm import health
     from crew_org.tools.github_issues import IssueClient
     from crew_org.tools.github_project import ProjectClient
@@ -73,11 +74,15 @@ def tick(
     console.print(f"[dim]acting as {escape(identity)}[/]")
 
     owner = env["GITHUB_OWNER"]
+    repo = env.get("PILOT_REPO", "crew")
     board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
     issues = IssueClient(token, owner)
+    # Refinement reads the code it is deciding about. A Business Analyst that
+    # cannot see the product writes criteria against one it is imagining.
+    ws = Workspace(owner, repo, token, _bot_identity(token, identity))
 
     with attach(sink, view):
-        result = run_tick(board, issues, sink, default_repo=env.get("PILOT_REPO", "crew"))
+        result = run_tick(board, issues, sink, default_repo=repo, ws=ws)
 
     console.print()
     if result.considered == 0:
@@ -256,8 +261,8 @@ def doctor(
 @app.command()
 def auth() -> None:
     """Verify the credential the agents use — including what it must NOT do."""
+    from crew_org.auth import REVIEW_APP_PREFIX, app_permissions, resolve_credentials, verify
     from crew_org.auth import Status as AuthStatus
-    from crew_org.auth import app_permissions, resolve_credentials, verify
     from crew_org.config import load_env
 
     env = load_env()
@@ -301,6 +306,31 @@ def auth() -> None:
     for c in checks:
         if c.hint:
             console.print(f"[yellow]→[/] [bold]{c.check}:[/] {escape(c.hint)}")
+
+    # The reviewing identity is checked for one thing only: that it is somebody
+    # else. An app cannot approve a pull request it opened, so a reviewer that
+    # resolves to the delivery app leaves every story in Awaiting Approval.
+    try:
+        review_token, review_identity = resolve_credentials(env, prefix=REVIEW_APP_PREFIX)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"\n[red]reviewing identity: {escape(str(exc))}[/]")
+        raise typer.Exit(code=1) from exc
+    grants = app_permissions()
+    if review_identity == identity:
+        console.print(
+            f"\n[yellow]reviewing identity: {escape(review_identity)} — the same app that "
+            f"opens the pull requests.[/] It can comment but never approve, so approved work "
+            f"waits on a person. Set {REVIEW_APP_PREFIX}ID and {REVIEW_APP_PREFIX}PRIVATE_KEY."
+        )
+    elif grants.get("pull_requests") != "write":
+        console.print(
+            f"\n[yellow]reviewing identity: {escape(review_identity)} — no write on pull "
+            f"requests[/] (has {escape(str(grants.get('pull_requests') or 'none'))}), "
+            "so it cannot post an approving review."
+        )
+    else:
+        console.print(f"\n[green]reviewing identity: {escape(review_identity)}[/] — can approve.")
+    del review_token
 
     if any(c.status is AuthStatus.FAIL for c in checks):
         console.print("\n[red]Token is not fit for the crew.[/]")
@@ -367,7 +397,7 @@ def review(
 
     Human-authored pull requests are reviewed on the same terms as the crew's.
     """
-    from crew_org.auth import resolve_credentials
+    from crew_org.auth import REVIEW_APP_PREFIX, resolve_credentials
     from crew_org.config import load_env
     from crew_org.flows.review import review_open_pulls
     from crew_org.llm import health
@@ -379,7 +409,9 @@ def review(
         raise typer.Exit(code=1)
 
     env = load_env()
-    token, identity = resolve_credentials(env)
+    # The reviewing app, not the delivery one: GitHub will not accept an
+    # approval from the identity that opened the pull request.
+    token, identity = resolve_credentials(env, prefix=REVIEW_APP_PREFIX)
     owner = env["GITHUB_OWNER"]
     repo = repo or env.get("PILOT_REPO", "crew")
 
@@ -389,7 +421,12 @@ def review(
 
     console.print()
     for outcome in result.reviewed:
-        mark = "[green]approved[/]" if outcome.approved else "[yellow]changes requested[/]"
+        if outcome.event == "APPROVE":
+            mark = "[green]approved[/]"
+        elif outcome.event == "REQUEST_CHANGES":
+            mark = "[yellow]changes requested[/]"
+        else:
+            mark = "[yellow]commented — a reviewer cannot approve its own pull request[/]"
         console.print(f"PR #{outcome.pr} — {mark}, {outcome.findings} findings")
     for outcome in result.skipped:
         console.print(f"[dim]PR #{outcome.pr} — skipped ({outcome.skipped})[/]")
@@ -474,6 +511,10 @@ def deliver(
         console.print(f"[green]#{number}[/] merged and done")
     for number in result.conflicted:
         console.print(f"[red]#{number}[/] merge conflict — blocked, needs a person")
+    for number, pull in result.awaiting_approval:
+        console.print(f"[yellow]#{number}[/] not merged — PR #{pull} has no approving review")
+    for number, why in result.unmergeable:
+        console.print(f"[red]#{number}[/] not merged — {why}")
     for outcome in result.delivered:
         if outcome.landed:
             console.print(f"[green]#{outcome.card}[/] → PR #{outcome.pr} on `{outcome.branch}`")

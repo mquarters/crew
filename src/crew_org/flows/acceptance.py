@@ -20,11 +20,33 @@ from pathlib import Path
 
 from crew_org.crews.qa_crew import QAVerdict, verify_story
 from crew_org.events import CrewEvent, EventKind, EventSink
+from crew_org.flows.moves import move_card
 from crew_org.git_ops import Workspace, branch_name
 from crew_org.tools import workspace
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
+from crew_org.tools.repo_context import IGNORED_DIRS
 from crew_org.tools.sandbox import Sandbox
+
+# QA reasons about the test code, so what it is shown decides its verdict. A
+# 12,000-character slice in the prompt cut story #13's two new tests off the end
+# of a 13,839-character file, and QA correctly reported that it could not find
+# them. New tests are appended, so a head-slice lands on the evidence every
+# time.
+#
+# Past this, QA refuses to judge rather than judging on part of the evidence.
+# QAVerdict has no way to say "I could not see enough to tell" — `proven` is a
+# bool — so incomplete evidence has to resolve to proven or unproven, and both
+# are false. Asking the model in prose not to read an omission as an absence is
+# worse still: it reads equally well as "assume it is covered", which turns a
+# truncation into an acceptance in the gate that now merges without a person.
+# 600,000 characters is roughly 150,000 tokens. The crew's own suite is already
+# 189,997 and growing, so 200,000 was weeks from refusing every verdict — a
+# guard that fires in ordinary work is a budget, and this one refuses outright.
+QA_CONTEXT_CHAR_CEILING = 600_000
+# The end of a test run is where the summary and the failures are. Keeping the
+# front of it is the same mistake delivery already learned not to make.
+QA_OUTPUT_CHAR_CEILING = 40_000
 
 IN_PROGRESS = "In Progress"
 AWAITING_QA = "Awaiting QA"
@@ -43,6 +65,10 @@ class QAOutcome:
     accepted: bool
     unproven: int = 0
     reason: str | None = None
+
+
+class EvidenceTooLarge(RuntimeError):
+    """The tests did not fit, so there is no honest verdict to give."""
 
 
 @dataclass
@@ -78,13 +104,39 @@ def render_qa(verdict: QAVerdict) -> str:
 
 
 def collect_tests(worktree: Path) -> str:
-    """The test code, which is the evidence QA reasons about."""
-    parts = []
+    """The test code, which is the evidence QA reasons about.
+
+    Every test file, whole, or EvidenceTooLarge. A cut that lands inside a test
+    function shows QA half a test and no sign that there was more, and a
+    verdict reached on part of the evidence is not a verdict.
+    """
+    parts: list[str] = []
+    total = 0
     for path in sorted(worktree.rglob("test_*.py")):
-        if ".venv" in path.parts:
+        # The same exclusions the Developer's context uses. A worktree has no
+        # `var/`, but nothing should depend on that to avoid collecting the
+        # tests of a repository that happens to be checked out inside this one.
+        if IGNORED_DIRS & set(path.parts):
             continue
-        parts.append(f"# {path.relative_to(worktree)}\n{path.read_text()}")
+        rel = path.relative_to(worktree)
+        body = path.read_text(encoding="utf-8", errors="ignore")
+        total += len(body)
+        if total > QA_CONTEXT_CHAR_CEILING:
+            raise EvidenceTooLarge(
+                f"the tests are larger than {QA_CONTEXT_CHAR_CEILING:,} characters "
+                f"(reached at {rel}), so no criterion can be judged on all of the "
+                "evidence. Raise QA_CONTEXT_CHAR_CEILING or split the suite."
+            )
+        parts.append(f"# {rel}\n{body}")
     return "\n\n".join(parts)
+
+
+def collect_output(results) -> str:
+    """What running the suite produced, keeping the end rather than the front."""
+    joined = "\n\n".join(f"$ {r.command}\n{r.output}" for r in results)
+    if len(joined) <= QA_OUTPUT_CHAR_CEILING:
+        return joined
+    return "…earlier output trimmed…\n" + joined[-QA_OUTPUT_CHAR_CEILING:]
 
 
 def run_qa(
@@ -119,7 +171,7 @@ def run_qa(
             check = workspace.check(worktree, sandbox=sandbox)
             verdict = verify_story(
                 f"{card.title}\n\n{issues.get(repo, number).get('body') or ''}",
-                test_output="\n\n".join(f"$ {r.command}\n{r.output}" for r in check.results)[:4000],
+                test_output=collect_output(check.results),
                 test_code=collect_tests(worktree),
             )
         except Exception as exc:  # noqa: BLE001
@@ -139,10 +191,28 @@ def run_qa(
         issues.comment(repo, number, render_qa(verdict))
 
         if verdict.accepted:
-            board.set_status(card.item_id, AWAITING_APPROVAL)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=AWAITING_APPROVAL,
+                by="QA Engineer",
+                card=number,
+                frm=AWAITING_QA,
+                summary="every criterion proven",
+            )
             result.verified.append(QAOutcome(card=number, accepted=True))
         else:
-            board.set_status(card.item_id, IN_PROGRESS)
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=IN_PROGRESS,
+                by="QA Engineer",
+                card=number,
+                frm=AWAITING_QA,
+                summary=f"returned — {len(verdict.unproven)} unproven",
+            )
             outcome = QAOutcome(
                 card=number,
                 accepted=False,
@@ -203,14 +273,16 @@ def close_finished_parents(
             if not statuses or any(status != DONE for status in statuses):
                 continue
 
-            board.set_status(card.item_id, DONE)
-            closed.append(card.number or 0)
-            sink.emit(
-                CrewEvent(
-                    kind=EventKind.CARD_MOVED,
-                    card=card.number,
-                    summary=f"all {len(statuses)} children done — closing {parent_type.lower()}",
-                    **{"to": DONE},
-                )
+            # Bookkeeping, not judgement: no role decided this, so the parent
+            # keeps whichever role last worked on it.
+            move_card(
+                board,
+                sink,
+                item_id=card.item_id,
+                to=DONE,
+                by=None,
+                card=card.number,
+                summary=f"all {len(statuses)} children done — closing {parent_type.lower()}",
             )
+            closed.append(card.number or 0)
     return closed

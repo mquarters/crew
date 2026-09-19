@@ -53,6 +53,7 @@ def red(output: str = "2 failed") -> CheckResult:
 class FakeBoard:
     def __init__(self, cards):
         self._cards, self.moves = cards, []
+        self.owners = []
 
     def cards(self):
         return self._cards
@@ -66,6 +67,9 @@ class FakeBoard:
 
     def set_status(self, item_id, column):
         self.moves.append((item_id, column))
+
+    def set_owner_agent(self, item_id, role):
+        self.owners.append((item_id, role))
 
 
 class FakeIssues:
@@ -87,6 +91,9 @@ class FakeIssues:
     def create_pull(self, repo, *, title, head, base, body):
         self.prs.append(head)
         return {"number": 100 + len(self.prs)}
+
+    def pull_for_branch(self, repo, branch):
+        return None
 
 
 class FakeWorkspace:
@@ -480,9 +487,10 @@ def test_a_failure_event_records_why_not_only_what(harness):
 # --- the repair must see its own work -----------------------------------
 
 
-def test_the_first_attempt_is_shown_names_not_bodies(tmp_path):
-    """Editing works by name, so names are the context that matters. Bodies are
-    thousands of volatile tokens the model does not need to choose a target."""
+def test_the_first_attempt_is_shown_the_bodies_too(tmp_path):
+    """Story #11 rewrote a function it had only ever seen the signature of, and
+    was refused for breaking behaviour that lives in the body. Names say what to
+    target; only the body says what the code currently promises."""
     from crew_org.flows.delivery import repository_context
 
     (tmp_path / "src").mkdir()
@@ -491,7 +499,7 @@ def test_the_first_attempt_is_shown_names_not_bodies(tmp_path):
     )
     context = repository_context(tmp_path)
     assert "calculate_throughput" in context
-    assert "SENTINEL" not in context
+    assert "SENTINEL" in context
 
 
 def test_methods_are_shown_qualified(tmp_path):
@@ -523,30 +531,90 @@ def test_a_repair_is_shown_the_current_file_contents(tmp_path):
     (tmp_path / "src/mod.py").write_text("SENTINEL = 1\n")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests/test_mod.py").write_text("ASSERTION = 2\n")
-    context = repository_context(tmp_path, include_source=True)
+    context = repository_context(tmp_path)
     assert "SENTINEL" in context
     assert "ASSERTION" in context
 
 
-def test_the_source_shown_to_a_repair_is_bounded(tmp_path):
-    """A large tree must not crowd out the failure it is meant to fix."""
-    from crew_org.flows import delivery
+def test_a_tree_that_does_not_fit_drops_whole_files_and_names_them(tmp_path):
+    """The ceiling is a guard, not a budget. A file cut mid-function is worse
+    than a file left out, because nothing in it marks where it stopped — so an
+    omitted file is omitted entirely, and the Developer is told it exists."""
+    from crew_org.tools import repo_context
 
+    ceiling = repo_context.CONTEXT_CHAR_CEILING
     (tmp_path / "src").mkdir()
+    # Sized off the ceiling rather than a fixed number, so raising the guard
+    # does not quietly stop this from testing the guard.
+    filler = "x = 1\n" * (ceiling // 60)
     for i in range(40):
-        (tmp_path / f"src/mod{i}.py").write_text("x = 1\n" * 2000)
-    context = delivery.repository_context(tmp_path, include_source=True)
-    assert len(context) < delivery.MAX_SOURCE_CHARS * 2
+        (tmp_path / f"src/mod{i}.py").write_text(f"MARKER_{i} = 1\n" + filler)
+    context = repo_context.repository_context(tmp_path)
+
+    assert len(context) < ceiling * 2
+    shown = [i for i in range(40) if f"MARKER_{i} = 1" in context]
+    assert shown, "nothing was shown at all"
+    for i in range(40):
+        # Every file is either shown whole or named as missing. Never half.
+        whole = f"`src/mod{i}.py`\n\n```python\nMARKER_{i} = 1" in context
+        named_missing = "not shown, because the tree did not fit" in context.lower() and (
+            i not in shown
+        )
+        assert whole or named_missing, f"src/mod{i}.py was neither shown whole nor named"
 
 
 def test_context_is_recomputed_on_every_attempt(harness):
     """Stale context is what made repairs non-convergent: a repair given the
     pre-implementation listing is fixing code it cannot read."""
-    _, _, _, _, calls, _ = harness(checks=[red(), green()])
+
+    def apply(worktree, implementation):
+        # Stand in for the first attempt landing in the worktree. Both passes
+        # are shown the source now, so recomputation has to be proved by what
+        # the source says rather than by whether it is there at all.
+        (worktree / "src").mkdir(parents=True, exist_ok=True)
+        (worktree / "src/written.py").write_text("FIRST_ATTEMPT = 1\n")
+        return []
+
+    _, _, _, _, calls, _ = harness(checks=[red(), green()], apply=apply)
     assert len(calls["context"]) == 2
     # The first pass has nothing written yet; the repair is shown what exists.
-    assert "Current source" not in calls["context"][0]
-    assert "Current source" in calls["context"][1]
+    assert "FIRST_ATTEMPT" not in calls["context"][0]
+    assert "FIRST_ATTEMPT" in calls["context"][1]
+
+
+def test_a_story_that_could_not_be_landed_says_why(harness):
+    """merge_approved has always worked out why a ready story did not land, and
+    the result dropped it on the floor: a run that silently skipped every merge
+    looked exactly like a run with nothing to merge."""
+    approved = story(6).model_copy(update={"status": "Awaiting Approval"})
+    result, *_ = harness(checks=[green()], cards=[approved, story(7)])
+
+    assert result.landed == []
+    assert result.unmergeable == [(6, "no open pull request")]
+
+
+# --- attribution ---------------------------------------------------------
+
+
+def test_the_developer_owns_the_card_it_claimed(harness):
+    """The board has always had an Owner Agent field and nothing wrote it, so
+    every card said a machine had acted and not which role."""
+    _, board, _, _, _, _ = harness(checks=[green()])
+
+    assert ("S6", "Developer") in board.owners
+
+
+def test_healing_an_interrupted_run_claims_nothing(harness, monkeypatch):
+    """Orphan reconciliation moves a card nobody decided to move. Attributing
+    that to a role is a guess, and a wrong owner is worse than none."""
+    stranded = story(6).model_copy(update={"status": "In Progress"})
+    _, board, _, _, _, seen = harness(checks=[green()], cards=[stranded])
+
+    assert ("S6", "Sprint Backlog") in board.moves
+    assert board.owners == [], "no role stranded it, so no role claims it"
+    moved = [e for e in seen if e.kind is EventKind.CARD_MOVED and e.role is None]
+    assert moved, "still reported, just not attributed"
+    assert moved[0].detail["from"] == "In Progress"
 
 
 # --- the regression guard in the loop -----------------------------------

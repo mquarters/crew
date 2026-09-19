@@ -15,7 +15,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from crew_org.agents import build_agents
 
-MAX_DIFF_CHARS = 30_000
+# The whole diff, or no approval. A head slice of 30,000 characters meant the
+# Reviewer approved files it had never seen — and its approval now merges, so
+# what it cannot see it must not wave through. Past the ceiling the honest
+# review is the one a person would give: this is too large to review in one
+# pass, split it.
+MAX_DIFF_CHARS = 200_000
 MIN_ACTION_CHARS = 15
 
 
@@ -59,7 +64,24 @@ class ReviewVerdict(BaseModel):
 def review_diff(title: str, diff: str, *, acceptance_criteria: str = "") -> ReviewVerdict:
     """Review one pull request's diff."""
     if len(diff) > MAX_DIFF_CHARS:
-        diff = diff[:MAX_DIFF_CHARS] + "\n\n… diff truncated …"
+        return ReviewVerdict(
+            summary=(
+                f"This diff is {len(diff):,} characters, beyond the "
+                f"{MAX_DIFF_CHARS:,} a single review pass can hold. Reviewing part of "
+                "it and approving the whole is not a review."
+            ),
+            approve=False,
+            findings=[
+                Finding(
+                    file="(whole change)",
+                    concern="The change is too large to be reviewed in one pass.",
+                    action=(
+                        "Split it into pull requests that can each be read end to end, "
+                        "one story's worth of change per pull request."
+                    ),
+                )
+            ],
+        )
 
     criteria = (
         f"\n\n## Acceptance criteria this must satisfy\n\n{acceptance_criteria}"

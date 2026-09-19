@@ -347,3 +347,46 @@ for name-addressed edits. On a 4,200-line file, whole-file editing cost
 in errors when models were pushed toward surgical line edits rather than whole
 functions, and a 9x rise without permissive parsing — so edits are whole
 definitions, and the applier corrects indentation rather than rejecting it.
+
+## 16. What an agent is shown
+
+An agent that breaks a rule may not have been shown what it needed to follow
+it. Ask that first, before adding a rule.
+
+Three rules for every limit on prompt content:
+
+1. **Trim for churn, not for bytes.** A limit is justified when the content
+   changes between attempts and invalidates the cached prefix. Size alone costs
+   nothing: the window is 262,144 tokens against a pilot repository of under
+   22,000 characters. Stable content can be large and cache perfectly.
+2. **A ceiling is a guard, not a budget.** Set it where a tree genuinely stops
+   fitting, not where a prompt feels long. It should never fire in normal work.
+3. **When it fires, fail loudly.** Drop whole files and name them, keep the end
+   of a log and say how much went, or refuse the task outright. Never a silent
+   half-measure, and never a partial unit — half a function, half a test, half
+   a diff — because nothing in it marks where it stopped.
+
+Where the evidence cannot be shown in full, the honest outcome is no verdict.
+A gate whose result type cannot express "I could not see enough to tell"
+must not be asked to guess, and prose telling a model not to read an omission
+as an absence reads equally well as "assume it is covered".
+
+**Why this is a rule and not a lesson learned.** Five limits, five flows, one
+failure, all found in a single day:
+
+| Limit | What it cut | What happened |
+|---|---|---|
+| `include_source=bool(feedback)` | the first attempt saw signatures, no bodies | story #11 rewrote `main`'s contract and was refused for breaking a body it had never read |
+| `MAX_OUTPUT_CHARS` | 3,000-char head + tail of every command | story #9's thirteen pytest failures were in the middle; three blind repairs, then blocked |
+| QA's `test_code[:12000]` | the last 1,839 chars of a test file | story #13 returned as unproven against two tests that were in the file, because new tests are appended |
+| `MAX_DIFF_CHARS` | the first 30,000 chars of a diff | the Reviewer approved files it had never seen — and its approval merges |
+| `split_epic(...[:800])` | the epic body the Business Analyst splits | the role that writes acceptance criteria could not see what it was writing them against |
+
+Each was added for a real reason and each degraded in silence. The
+compensation was always the same and always wrong: another sentence in the
+prompt describing what the agent could not see.
+
+**What this does not license.** Constraints that bound what a model *writes*
+are a different thing and stay: a file-size validator, a generation token
+limit, a cap on how many epics may be proposed. So do the short slices on
+event summaries and board comments — those are logs, not context.

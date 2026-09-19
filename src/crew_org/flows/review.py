@@ -23,6 +23,11 @@ class ReviewOutcome:
     approved: bool
     findings: int = 0
     skipped: str | None = None
+    # What GitHub was actually told, which is not always the verdict reached.
+    # Reporting the verdict alone is how a run printed "approved" over a review
+    # GitHub had recorded as COMMENTED, and left the merge waiting on an
+    # approval nobody knew was missing.
+    event: str | None = None
 
 
 @dataclass
@@ -97,14 +102,20 @@ def review_open_pulls(
             )
             continue
 
-        # A reviewer cannot approve its own work. When the crew authored the
-        # change, the verdict is posted as a comment and the approval stays
-        # with a human — which is the gate working, not a limitation.
+        # GitHub refuses an approval from the identity that opened the pull
+        # request. The crew reviews as a second app for exactly this reason, so
+        # this downgrade now only fires where it should: a pull request the
+        # reviewing identity opened itself.
         event = "COMMENT" if author == bot_login else verdict.event
         issues.create_review(repo, number, event=event, body=render_review(verdict))
 
         result.reviewed.append(
-            ReviewOutcome(pr=number, approved=verdict.approve, findings=len(verdict.findings))
+            ReviewOutcome(
+                pr=number,
+                approved=event == "APPROVE",
+                findings=len(verdict.findings),
+                event=event,
+            )
         )
         sink.emit(
             CrewEvent(

@@ -140,12 +140,18 @@ class StoryProposal(BaseModel):
         return value
 
 
-def propose_epics(goal: str) -> EpicProposal:
-    """Product Owner only: a goal becomes a set of epics."""
+def propose_epics(goal: str, *, repository: str = "") -> EpicProposal:
+    """Product Owner only: a goal becomes a set of epics.
+
+    `repository` is the code the goal is about. A role deciding what should
+    exist works better for knowing what already does — and the alternative is
+    a decomposition of a product the model is imagining.
+    """
     agents = build_agents("product_owner")
+    repo_block = f"## The repository as it stands\n\n{repository}\n\n" if repository else ""
     task = Task(
         description=(
-            f"The Product Sponsor has set this goal:\n\n{goal}\n\n"
+            repo_block + f"The Product Sponsor has set this goal:\n\n{goal}\n\n"
             f"Propose between {MIN_EPICS} and {MAX_EPICS} epics that together deliver it. "
             "Decompose by outcome, never by architectural layer. "
             "Order them so the most valuable is deliverable first.\n\n"
@@ -163,7 +169,7 @@ def propose_epics(goal: str) -> EpicProposal:
     return crew.kickoff().pydantic
 
 
-def split_epic(title: str, context: str = "") -> StoryProposal:
+def split_epic(title: str, context: str = "", *, repository: str = "") -> StoryProposal:
     """Business Analyst only: an epic becomes INVEST-sized stories.
 
     Takes the epic's title and whatever context the card carries, rather than an
@@ -173,13 +179,20 @@ def split_epic(title: str, context: str = "") -> StoryProposal:
     inventing data.
     """
     agents = build_agents("business_analyst")
+    # Stable first: the repository is identical between every split in a pass,
+    # where the epic is not, so it goes ahead of it and the cached prefix holds.
+    repo_block = f"## The repository as it stands\n\n{repository}\n\n" if repository else ""
     task = Task(
         description=(
-            f"Split this epic into stories.\n\n"
+            repo_block + "Split this epic into stories.\n\n"
             f"Epic: {title}\n\n{context}\n\n"
             "Each story must satisfy INVEST and carry acceptance criteria a test can be "
             "written from directly. Split by workflow step, by business rule, or by "
-            "happy-path-then-edge-cases — never by layer."
+            "happy-path-then-edge-cases — never by layer.\n\n"
+            "Write criteria against what the code above actually has. A criterion "
+            "asking for data the product does not carry cannot be satisfied by any "
+            "implementation, and the story will be delivered as something that passes "
+            "its tests and does nothing."
         ),
         expected_output="Stories with acceptance criteria and estimates.",
         agent=agents["business_analyst"],

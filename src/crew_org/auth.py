@@ -75,19 +75,34 @@ def app_permissions() -> dict[str, str]:
     return dict(_LAST_APP_PERMISSIONS)
 
 
-def resolve_credentials(env: dict[str, str] | None = None) -> tuple[str, str]:
+# The reviewing identity. GitHub refuses an approval from the app that opened
+# the pull request, so a single identity could never satisfy merge_approved —
+# the crew reviewed its own work, GitHub recorded COMMENTED, and every story
+# stopped in Awaiting Approval waiting for a person.
+REVIEW_APP_PREFIX = "GITHUB_REVIEW_APP_"
+
+
+def resolve_credentials(
+    env: dict[str, str] | None = None, *, prefix: str = "GITHUB_APP_"
+) -> tuple[str, str]:
     """The token the crew should act with, and a description of that identity.
 
     Prefers the GitHub App: a PAT always acts as the human who created it, so
     the crew's work would be attributed to the Sponsor and the Sponsor could not
     approve the crew's pull requests.
+
+    `prefix` chooses the app. The reviewing app falls back to the delivery app
+    when it is not configured, so a repository with one app still works — it
+    just cannot approve its own pull requests, which is where it started.
     """
     from crew_org.config import load_env  # noqa: PLC0415
     from crew_org.github_app import AppCredentials, AppTokenProvider  # noqa: PLC0415
 
     env = env if env is not None else load_env()
 
-    creds = AppCredentials.from_env(env)
+    creds = AppCredentials.from_env(env, prefix=prefix)
+    if creds is None and prefix != "GITHUB_APP_":
+        creds = AppCredentials.from_env(env)
     if creds is not None:
         provider = AppTokenProvider(creds)
         token = provider.token()

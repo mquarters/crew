@@ -96,17 +96,53 @@ def test_changes_are_requested_with_the_findings_attached(monkeypatch):
 
 
 def test_the_crew_comments_rather_than_approving_its_own_work(monkeypatch):
-    """GitHub forbids self-approval, and so does the gate this protects: the
-    approval stays with a human."""
+    """GitHub forbids self-approval. The crew reviews as a second app so this
+    only fires on a pull request the reviewing identity opened itself."""
     issues = FakeIssues([pull(author=BOT)])
     run(issues, APPROVAL, monkeypatch)
     assert issues.submitted[0][1] == "COMMENT"
+
+
+def test_a_downgraded_verdict_is_not_reported_as_approved(monkeypatch):
+    """A run printed "approved" over a review GitHub had recorded as COMMENTED,
+    and the merge then waited on an approval nobody knew was missing."""
+    issues = FakeIssues([pull(author=BOT)])
+    result = run(issues, APPROVAL, monkeypatch)
+    outcome = result.reviewed[0]
+    assert outcome.event == "COMMENT"
+    assert outcome.approved is False
+
+
+def test_another_identity_s_pull_request_is_actually_approved(monkeypatch):
+    """The whole point of the second app: the delivery bot's work gets a real
+    APPROVED, so merge_approved has something to act on."""
+    issues = FakeIssues([pull(author="mqucifer-crew-delivery[bot]")])
+    result = run(issues, APPROVAL, monkeypatch)
+    assert issues.submitted[0][1] == "APPROVE"
+    assert result.reviewed[0].approved is True
 
 
 def test_its_own_work_still_gets_the_findings(monkeypatch):
     issues = FakeIssues([pull(author=BOT)])
     run(issues, REJECTION, monkeypatch)
     assert "delete the import" in issues.submitted[0][2]
+
+
+# --- a diff too large to read ---------------------------------------------
+
+
+def test_a_diff_beyond_one_pass_is_not_approved():
+    """A 30,000-character head slice meant the Reviewer approved files it had
+    never seen, and its approval merges. Past the ceiling the honest verdict is
+    the one a person gives: too large to review, split it."""
+    from crew_org.crews.review_crew import MAX_DIFF_CHARS, review_diff
+
+    verdict = review_diff("Enormous", "+x\n" * MAX_DIFF_CHARS)
+
+    assert verdict.approve is False
+    assert verdict.event == "REQUEST_CHANGES"
+    assert verdict.findings, "a rejection has to say why"
+    assert "too large" in verdict.findings[0].concern.lower()
 
 
 # --- idempotency ---------------------------------------------------------

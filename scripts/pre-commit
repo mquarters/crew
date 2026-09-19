@@ -40,4 +40,15 @@ if git diff --cached -U0 | grep -qE "^\+[^#]*ANTHROPIC_API_KEY="; then
   fail=1
 fi
 
+# CI gates on formatting too, and nothing local ran it — the gate sat red for
+# four commits. Check the staged content, not the working tree, so a commit is
+# judged on what it actually contains.
+while IFS= read -r f; do
+  [[ "$f" == *.py || "$f" == *.pyi ]] || continue
+  if ! git show ":$f" | uv run ruff format --check --stdin-filename "$f" - >/dev/null; then
+    echo "BLOCKED: $f is not formatted. Run: uv run ruff format ."
+    fail=1
+  fi
+done <<< "$staged"
+
 exit $fail
