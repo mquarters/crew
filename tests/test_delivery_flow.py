@@ -136,7 +136,7 @@ class FakeWorkspace:
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
     """Everything the loop needs, with the model and the shell faked out."""
-    calls = {"implement": 0, "escalate": 0, "feedback": [], "context": []}
+    calls = {"implement": 0, "escalate": 0, "feedback": [], "context": [], "prior": []}
 
     def make(
         *,
@@ -154,10 +154,11 @@ def harness(tmp_path, monkeypatch):
         ws = FakeWorkspace(tmp_path)
         sequence = list(checks)
 
-        def fake_implement(story_text, *, context, feedback=""):
+        def fake_implement(story_text, *, context, feedback="", prior=""):
             calls["implement"] += 1
             calls["feedback"].append(feedback)
             calls["context"].append(context)
+            calls["prior"].append(prior)
             if implement:
                 return implement(calls["implement"])
             return IMPL
@@ -605,6 +606,50 @@ def test_a_dry_run_does_not_merge(harness):
     assert result.landed == [], "nothing merged"
     assert result.would_land == [6], "and it said what it declined to merge"
     assert ("S6", "Done") not in board.moves
+
+
+# --- a card that comes back carries what was said about it ----------------
+
+
+def test_a_redelivered_story_carries_both_verdicts(harness, monkeypatch):
+    """They judge different things — the diff and the behaviour — and a card can
+    be returned by one while the other was content. Returning a card for a named
+    defect and implementing it again knowing nothing about that defect is how a
+    story is returned twice for the same reason."""
+    from crew_org.flows import delivery as delivery_mod
+
+    monkeypatch.setattr(
+        delivery_mod,
+        "prior_verdicts",
+        lambda *a, **k: "## QA — not accepted\n\n---\n\nchanges requested: flaky sleep",
+    )
+    _, _, _, _, calls, _ = harness(checks=[green()], cards=[story(6)])
+
+    assert "QA — not accepted" in calls["prior"][0]
+    assert "flaky sleep" in calls["prior"][0]
+
+
+def test_a_first_delivery_carries_nothing(harness):
+    """A card being delivered for the first time has no verdicts, and must not
+    be told it has."""
+    _, _, _, _, calls, _ = harness(checks=[green()], cards=[story(6)])
+
+    assert calls["prior"] == [""]
+
+
+def test_a_verdict_that_cannot_be_read_does_not_lose_the_delivery(harness, monkeypatch):
+    """Best effort: losing a delivery because a comment could not be fetched is
+    worse than delivering without the context."""
+    from crew_org.flows import delivery as delivery_mod
+
+    def broken(*a, **k):
+        raise RuntimeError("github is down")
+
+    monkeypatch.setattr(delivery_mod.IssueClient, "comments", broken, raising=False)
+    result, _, _, _, calls, _ = harness(checks=[green()], cards=[story(6)])
+
+    assert len(result.delivered) == 1
+    assert calls["prior"] == [""]
 
 
 # --- one story at a time within an epic ----------------------------------

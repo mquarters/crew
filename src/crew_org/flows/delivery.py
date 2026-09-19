@@ -179,6 +179,43 @@ def sprint_stories(cards: list[Card], sprint: str, *, repos: set[str] | None = N
     )
 
 
+def prior_verdicts(issues: IssueClient, repo: str, number: int, branch: str) -> str:
+    """What the Reviewer and QA said the last time this story was delivered.
+
+    Both, not the most recent: they judge different things — the diff and the
+    behaviour — and a card can be returned by one while the other was content.
+    Returning a card for a named defect and then implementing it again knowing
+    nothing about that defect is how a story is returned twice for the same
+    reason.
+
+    Best effort. A card being delivered for the first time has neither, and a
+    reading failure is not worth losing the delivery over.
+    """
+    from crew_org.flows.acceptance import QA_MARKER  # noqa: PLC0415
+    from crew_org.flows.review import REVIEW_MARKER  # noqa: PLC0415
+
+    parts: list[str] = []
+    try:
+        qa = [c for c in issues.comments(repo, number) if QA_MARKER in (c.get("body") or "")]
+        if qa:
+            parts.append(qa[-1]["body"])
+    except Exception:  # noqa: BLE001, S110
+        pass
+    try:
+        pull = issues.pull_for_branch(repo, branch)
+        if pull:
+            reviews = [
+                r
+                for r in issues.pull_reviews(repo, pull["number"])
+                if REVIEW_MARKER in (r.get("body") or "")
+            ]
+            if reviews:
+                parts.append(reviews[-1]["body"])
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return "\n\n---\n\n".join(parts)
+
+
 def held_by_a_sibling(cards: list[Card], story: Card) -> Card | None:
     """The earlier story in this story's epic that has not landed yet.
 
@@ -267,6 +304,11 @@ def deliver_story(
     )
 
     feedback = ""
+    # What the gates said if this story has been round before. Read once: it is
+    # fixed for this delivery, where `feedback` changes on every attempt.
+    prior = prior_verdicts(issues, repo, number, branch)
+    if prior:
+        sink.note(EventKind.NOTE, f"#{number} carries a previous verdict into this attempt")
     implementation: Implementation | None = None
 
     while True:
@@ -274,7 +316,9 @@ def deliver_story(
         # it is fixing code it cannot read.
         context = repository_context(worktree)
         try:
-            implementation = implement_story(story_text, context=context, feedback=feedback)
+            implementation = implement_story(
+                story_text, context=context, feedback=feedback, prior=prior
+            )
         except Exception as exc:  # noqa: BLE001
             # The model could not produce a valid implementation at all.
             failure = LocalFailure(

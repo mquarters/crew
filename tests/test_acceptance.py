@@ -7,6 +7,8 @@ proven", and conflating them is how Definition of Done quietly erodes.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -122,6 +124,43 @@ def test_the_end_of_a_run_is_what_survives(tmp_path):
 
     assert "FAILED test_last" in collected
     assert "earlier output trimmed" in collected
+
+
+# --- a verdict belongs to a revision -------------------------------------
+
+
+def test_a_verdict_is_scoped_to_the_commit_it_judged():
+    """`has_comment_marked` matches any comment carrying the bare marker, so the
+    rejection QA itself wrote permanently disqualified the card: the Developer
+    repaired, the card came back, and QA skipped it in silence — for good, while
+    the command printed "Nothing awaiting QA"."""
+    from crew_org.flows.acceptance import qa_marker
+
+    assert qa_marker("a" * 40) != qa_marker("b" * 40)
+    assert qa_marker("abcdef1234567890") == qa_marker("abcdef123456")
+
+
+def test_a_rendered_verdict_carries_both_markers():
+    """The bare marker keeps every verdict findable — a repair reads it back as
+    prior context — and the revision one says which commit it judged."""
+    from crew_org.flows.acceptance import QA_MARKER, qa_marker, render_qa
+
+    verdict = QAVerdict(summary="s", accepted=False, criteria=[criterion(False)])
+    body = render_qa(verdict, revision="deadbeefcafe")
+
+    assert QA_MARKER in body
+    assert qa_marker("deadbeefcafe") in body
+
+
+def test_a_verdict_rendered_without_a_revision_still_works():
+    """Nothing should depend on a revision being available to say what it found."""
+    from crew_org.flows.acceptance import QA_MARKER, render_qa
+
+    verdict = QAVerdict(summary="s", accepted=False, criteria=[criterion(False)])
+    body = render_qa(verdict)
+
+    assert QA_MARKER in body
+    assert not re.search(r"<!-- crew:qa [0-9a-f]+ -->", body), "no revision claimed"
 
 
 # --- selection -----------------------------------------------------------
