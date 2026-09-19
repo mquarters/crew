@@ -84,25 +84,22 @@ def test_every_test_function_survives_collection(tmp_path):
         assert f"def test_case_{i}()" in collected
 
 
-def test_a_test_file_that_does_not_fit_is_named_rather_than_halved(tmp_path):
-    """Half a test function reads as a test that checks less than it does."""
+def test_evidence_that_does_not_fit_refuses_a_verdict(tmp_path):
+    """QAVerdict has no way to say "I could not see enough to tell", so a
+    partial view has to resolve to proven or unproven and both are false. The
+    run fails loudly instead, and says which file it got to."""
+    import pytest as _pytest
+
     from crew_org.flows import acceptance
 
     (tmp_path / "tests").mkdir()
     for name in ("a", "b"):
         (tmp_path / f"tests/test_{name}.py").write_text(
-            f"MARKER_{name} = 1\n" + f"# {name}\n" * 80_000
+            f"MARKER_{name} = 1\n" + f"# {name}\n" * 40_000
         )
-    collected = acceptance.collect_tests(tmp_path)
 
-    assert len(collected) < acceptance.QA_CONTEXT_CHAR_CEILING * 2
-    assert "did not fit" in collected
-    assert "Do not conclude a criterion is untested" in collected
-    # Whichever file was dropped, it was dropped whole.
-    for name in ("a", "b"):
-        shown = f"MARKER_{name} = 1" in collected
-        named = f"tests/test_{name}.py" in collected
-        assert shown or named
+    with _pytest.raises(acceptance.EvidenceTooLarge, match="tests/test_b.py"):
+        acceptance.collect_tests(tmp_path)
 
 
 def test_the_end_of_a_run_is_what_survives(tmp_path):

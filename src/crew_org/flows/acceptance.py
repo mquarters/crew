@@ -30,7 +30,14 @@ from crew_org.tools.sandbox import Sandbox
 # 12,000-character slice in the prompt cut story #13's two new tests off the end
 # of a 13,839-character file, and QA correctly reported that it could not find
 # them. New tests are appended, so a head-slice lands on the evidence every
-# time. Whole files or a named omission — never a file cut mid-test.
+# time.
+#
+# Past this, QA refuses to judge rather than judging on part of the evidence.
+# QAVerdict has no way to say "I could not see enough to tell" — `proven` is a
+# bool — so incomplete evidence has to resolve to proven or unproven, and both
+# are false. Asking the model in prose not to read an omission as an absence is
+# worse still: it reads equally well as "assume it is covered", which turns a
+# truncation into an acceptance in the gate that now merges without a person.
 QA_CONTEXT_CHAR_CEILING = 200_000
 # The end of a test run is where the summary and the failures are. Keeping the
 # front of it is the same mistake delivery already learned not to make.
@@ -53,6 +60,10 @@ class QAOutcome:
     accepted: bool
     unproven: int = 0
     reason: str | None = None
+
+
+class EvidenceTooLarge(RuntimeError):
+    """The tests did not fit, so there is no honest verdict to give."""
 
 
 @dataclass
@@ -90,29 +101,25 @@ def render_qa(verdict: QAVerdict) -> str:
 def collect_tests(worktree: Path) -> str:
     """The test code, which is the evidence QA reasons about.
 
-    Bounded here, where the files are still files, rather than by a slice of
-    the assembled string: a cut that lands inside a test function shows QA
-    half a test and no sign that there was more.
+    Every test file, whole, or EvidenceTooLarge. A cut that lands inside a test
+    function shows QA half a test and no sign that there was more, and a
+    verdict reached on part of the evidence is not a verdict.
     """
     parts: list[str] = []
-    omitted: list[str] = []
-    budget = QA_CONTEXT_CHAR_CEILING
+    total = 0
     for path in sorted(worktree.rglob("test_*.py")):
         if ".venv" in path.parts:
             continue
         rel = path.relative_to(worktree)
         body = path.read_text(encoding="utf-8", errors="ignore")
-        if len(body) > budget:
-            omitted.append(str(rel))
-            continue
-        budget -= len(body)
+        total += len(body)
+        if total > QA_CONTEXT_CHAR_CEILING:
+            raise EvidenceTooLarge(
+                f"the tests are larger than {QA_CONTEXT_CHAR_CEILING:,} characters "
+                f"(reached at {rel}), so no criterion can be judged on all of the "
+                "evidence. Raise QA_CONTEXT_CHAR_CEILING or split the suite."
+            )
         parts.append(f"# {rel}\n{body}")
-    if omitted:
-        parts.append(
-            "# These test files exist and are not shown, because they did not fit: "
-            + ", ".join(omitted)
-            + ". Do not conclude a criterion is untested from their absence."
-        )
     return "\n\n".join(parts)
 
 
