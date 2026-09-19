@@ -130,6 +130,59 @@ def test_a_timeout_is_named_as_such_in_the_report():
     assert "timed out" in CheckResult(results=[timed]).failure_report
 
 
+# --- the autofix pass ----------------------------------------------------
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    """Record what check() runs, and let each command's exit code be chosen."""
+    calls: list[list[str]] = []
+    codes: dict[str, int] = {}
+
+    def fake_run(worktree, command, **_kwargs):
+        calls.append(command)
+        key = " ".join(command)
+        return CommandResult(
+            command=key, code=codes.get(key, 0), output=codes.get(key, 0) and "x" or ""
+        )
+
+    monkeypatch.setattr(workspace, "run", fake_run)
+    return calls, codes
+
+
+def test_the_fixable_is_fixed_before_anything_is_judged(tmp_path, recorded):
+    calls, _ = recorded
+    check(tmp_path, sandbox=HOST)
+    joined = [" ".join(c) for c in calls]
+    fix = joined.index("uv run ruff check --fix-only .")
+    lint = joined.index("uv run ruff check .")
+    assert fix < lint, "autofix must run before the lint that judges"
+    assert joined.index("uv run ruff format .") < lint
+
+
+def test_a_failing_autofix_is_not_a_failing_check(tmp_path, recorded):
+    """`ruff check --fix-only` exits non-zero when something is left unfixed.
+    That is the lint's verdict to deliver, not the autofix's — otherwise every
+    unfixable finding would be reported twice and counted once too often."""
+    _, codes = recorded
+    codes["uv run ruff check --fix-only ."] = 1
+    assert check(tmp_path, sandbox=HOST).ok
+
+
+def test_the_verdict_is_still_the_lint_and_the_tests(tmp_path, recorded):
+    _, codes = recorded
+    codes["uv run ruff check ."] = 1
+    assert not check(tmp_path, sandbox=HOST).ok
+
+
+def test_nothing_runs_if_dependencies_do_not_resolve(tmp_path, recorded):
+    """Autofixing with no toolchain installed would fail confusingly."""
+    calls, codes = recorded
+    codes["uv sync --extra dev --quiet"] = 1
+    check(tmp_path, sandbox=HOST)
+    assert len(calls) == 1
+
+
 def test_a_failed_sync_stops_before_linting(tmp_path, monkeypatch):
     """Running tests against unresolved dependencies produces noise, not signal."""
     calls: list[list[str]] = []

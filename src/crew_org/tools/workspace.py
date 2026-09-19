@@ -165,13 +165,38 @@ def run(
     return CommandResult(command=printable, code=completed.returncode, output=output)
 
 
+# What a developer's editor does on save. Deterministic, so there is no reason
+# to spend a model round-trip on any of it.
+AUTOFIX = (
+    ["uv", "run", "ruff", "check", "--fix-only", "."],
+    ["uv", "run", "ruff", "format", "."],
+)
+
+VERIFY = (
+    ["uv", "run", "ruff", "check", "."],
+    ["uv", "run", "pytest", "-q"],
+)
+
+
 def check(
     worktree: Path, *, sandbox: Sandbox | None = None, timeout: int = DEFAULT_TIMEOUT
 ) -> CheckResult:
-    """Resolve dependencies, lint, and test.
+    """Format what a formatter owns, then lint and test what is left.
 
-    Only the dependency step is given a network. Lint and tests run with none at
-    all, so generated code cannot reach anything while it executes.
+    The autofix pass is not part of the verdict, and deliberately so. An unused
+    import and a missed blank line are not judgement calls — they have exactly
+    one correct resolution, which a tool applies in milliseconds. Sending them
+    to the model instead spends a repair attempt, and the repair attempts are
+    the budget reserved for failures that actually need thinking. A card was
+    blocked having spent every attempt on an unused variable and a long line,
+    never once reaching the question of whether its logic was right.
+
+    So the fixable is fixed, and the model is asked only about the rest. What
+    survives a formatter is, by construction, something a formatter could not
+    decide.
+
+    Only the dependency step is given a network. Everything after it runs with
+    none at all, so generated code cannot reach anything while it executes.
     """
     sandbox = sandbox or Sandbox()
     results = [
@@ -184,6 +209,10 @@ def check(
         )
     ]
     if results[0].ok:
-        for command in (["uv", "run", "ruff", "check", "."], ["uv", "run", "pytest", "-q"]):
+        for command in AUTOFIX:
+            # Outcome ignored on purpose: whatever the autofix could not fix is
+            # reported by the lint that follows, which is the verdict.
+            run(worktree, command, sandbox=sandbox, network=False, timeout=timeout)
+        for command in VERIFY:
             results.append(run(worktree, command, sandbox=sandbox, network=False, timeout=timeout))
     return CheckResult(results=results)
