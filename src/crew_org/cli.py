@@ -246,6 +246,70 @@ def _synthetic_tick(sink: EventSink) -> None:
 
 
 @app.command()
+def capability() -> None:
+    """What the crew can do, read off the board.
+
+    Two ladders (section 18): a card in the crew's own repository advances a
+    capability, a card in a delivery repository advances a product. The ratio
+    between them says whether the orchestrator is still being built.
+    """
+    from crew_org.auth import resolve_credentials
+    from crew_org.config import load_env
+    from crew_org.flows.capability import scorecard
+    from crew_org.tools.github_project import ProjectClient
+
+    env = load_env()
+    token, _ = resolve_credentials(env)
+    owner = env["GITHUB_OWNER"]
+    crew_repo = env.get("CREW_REPO", "crew")
+    board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
+    card = scorecard(board.cards(), crew_repo=crew_repo)
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    table.add_column("capability")
+    table.add_column("done", justify="right")
+    table.add_column("open", justify="right")
+    table.add_column("points", justify="right")
+    table.add_column("")
+    for row in card.rows:
+        if row.total == 0:
+            table.add_row(row.capability, "", "", "", "[dim]nothing[/]")
+            continue
+        state = "[green]landed[/]" if row.open == 0 else "[yellow]in flight[/]"
+        table.add_row(
+            row.capability,
+            str(row.done),
+            str(row.open) if row.open else "",
+            f"{row.points_done + row.points_open:g}",
+            state,
+        )
+    console.print()
+    console.print(table)
+
+    crew_total = sum(r.total for r in card.rows)
+    product_total = card.product_done + card.product_open
+    if crew_total or product_total:
+        share = 100 * crew_total / (crew_total + product_total or 1)
+        console.print(
+            f"[dim]{crew_total} crew cards, {product_total} product cards "
+            f"— {share:.0f}% of the work is on the crew itself.[/]"
+        )
+    if card.unattributed:
+        console.print(
+            "[yellow]No capability set:[/] "
+            + ", ".join(f"#{n}" for n in card.unattributed)
+            + " — a scorecard with unattributed cards is not a scorecard."
+        )
+    # Said plainly, because the table invites the opposite reading: an empty row
+    # means no card has advanced that capability, which is not the same as the
+    # capability being absent. Some of what works was built before any card was
+    # attributed to it.
+    console.print(
+        "[dim]Counts cards, not capability. An empty row means no card has carried it.[/]"
+    )
+
+
+@app.command()
 def doctor(
     base_url: str = typer.Option(
         None, "--base-url", help="OpenAI-compatible endpoint, e.g. http://host:30000/v1"
