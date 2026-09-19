@@ -196,7 +196,19 @@ def _deliver(crew: Crew, *, dry_run: bool) -> PhaseOutcome:
         limit=None,
         repos=crew.repos,
     )
-    moved = bool(result.landed or result.delivered or result.blocked or result.recovered)
+    if dry_run:
+        # A dry delivery puts every card back where it found it: Sprint Backlog
+        # to In Progress and home again, with the diff shown and nothing
+        # landed. Counting that as movement means the pass always moved, the
+        # loop never reaches quiescence, and it re-delivers the same stories
+        # until the cap stops it — observed doing exactly that, re-claiming #31
+        # one second after putting it down.
+        #
+        # Orphan reconciliation is the exception: it heals an interrupted run
+        # and is not gated on dry_run, so it is real movement either way.
+        moved = bool(result.recovered)
+    else:
+        moved = bool(result.landed or result.delivered or result.blocked or result.recovered)
     return PhaseOutcome(
         "deliver",
         moved=moved,

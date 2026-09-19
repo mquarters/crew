@@ -116,3 +116,46 @@ def test_a_failing_phase_alone_does_not_keep_the_loop_spinning(crew, monkeypatch
     read as progress — that is an infinite loop wearing a failure's clothes."""
     phases(monkeypatch, ("refine", RuntimeError("still down")))
     assert loop.run(crew).passes == 1
+
+
+# --- a dry pass is not progress ------------------------------------------
+
+
+class FakeDeliveryResult:
+    def __init__(self, **kw):
+        self.landed = kw.get("landed", [])
+        self.delivered = kw.get("delivered", [])
+        self.blocked = kw.get("blocked", [])
+        self.recovered = kw.get("recovered", [])
+
+
+def deliver_returning(monkeypatch, **kw):
+    import crew_org.flows.delivery as delivery_mod
+
+    monkeypatch.setattr(delivery_mod, "deliver", lambda *a, **k: FakeDeliveryResult(**kw))
+
+
+def test_a_dry_delivery_is_not_movement(crew, monkeypatch):
+    """A dry delivery puts every card back where it found it. Counting the
+    round trip as progress kept the loop re-delivering the same stories until
+    the pass cap stopped it — it re-claimed #31 one second after putting it
+    down."""
+    deliver_returning(monkeypatch, delivered=[1, 2, 3])
+
+    outcome = loop._deliver(crew, dry_run=True)
+
+    assert outcome.moved is False
+
+
+def test_a_real_delivery_is_movement(crew, monkeypatch):
+    deliver_returning(monkeypatch, delivered=[1])
+
+    assert loop._deliver(crew, dry_run=False).moved is True
+
+
+def test_healing_an_interrupted_run_counts_even_on_a_dry_pass(crew, monkeypatch):
+    """Orphan reconciliation is not gated on dry_run, so it really does move
+    cards and the next pass has something new to act on."""
+    deliver_returning(monkeypatch, recovered=[7])
+
+    assert loop._deliver(crew, dry_run=True).moved is True
