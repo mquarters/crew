@@ -249,11 +249,11 @@ def repository_context(worktree: Path) -> str:
         "method. A file is not a definition: to change what a package exports, "
         "edit `__all__`, not `__init__`.",
         "",
-        "The signatures above are what merged code already calls. Change a "
-        "body as freely as the story needs, but keep every parameter list, "
-        "every `[property]`, and every existing definition — if this story "
-        "needs something the current shape cannot express, add a new "
-        "definition beside it rather than reshaping the old one.",
+        "The signatures above are what merged code already calls. Changing a "
+        "public one is refused — not as a matter of taste, but because callers "
+        "you are not editing would break. Everything else is yours: bodies, "
+        "private helpers, module internals, and new definitions of whatever "
+        "shape the story needs. Design it the way it should be designed.",
     ]
 
     for name in CONTEXT_FILES:
