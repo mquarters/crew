@@ -301,13 +301,15 @@ def broken_contracts(worktree: Path, edits: list) -> dict[str, tuple[str, str]]:
 
         key = f"{edit.path}::{edit.target}"
         if operation == "delete":
-            found[key] = (was, "removed")
+            found[key] = (was, "removed entirely")
             continue
 
         new_node = _first_definition(edit.source)
-        now = signature_of(new_node) if new_node is not None else None
-        if now is not None and now != was:
-            found[key] = (was, now)
+        if new_node is None:
+            continue
+        broke = contract_break(old_node, new_node)
+        if broke is not None:
+            found[key] = (was, broke)
 
     return found
 
@@ -320,22 +322,20 @@ def describe_contracts(broken: dict[str, tuple[str, str]]) -> str:
         "still call them the old way.",
         "",
     ]
-    for key, (was, now) in sorted(broken.items()):
+    for key, (was, broke) in sorted(broken.items()):
         path, target = key.split("::", 1)
-        lines.append(f"`{target}` in `{path}`")
-        lines.append(f"    was: {was}")
-        lines.append(f"    now: {now}")
+        lines.append(f"`{target}` in `{path}` {broke}")
+        lines.append(f"    it is currently: {was}")
     lines += [
         "",
-        "Keep each of these signatures exactly as it is. You may rewrite a "
-        "body freely — that is invisible to callers — but a parameter list, a "
-        "property that becomes a method, a dataclass field, or a removed "
-        "definition is not.",
+        "Adding is fine and is usually the answer: a new field with a default, "
+        "a new method, a new optional parameter, a whole new function. Rewrite "
+        "a body as freely as the story needs — that is invisible to callers.",
         "",
-        "If this story needs behaviour the current signature cannot express, "
-        "add a new definition alongside the existing one and leave the old one "
-        "working. Do not renegotiate an interface to make one story easier; "
-        "everything already built on it has to keep passing.",
+        "What callers cannot survive is a promise being taken back. Keep every "
+        "existing parameter, in order; keep a property a property; keep every "
+        "field it already has, in the order it has them. If you need a new "
+        "field, append it with a default.",
     ]
     return "\n".join(lines)
 
@@ -379,3 +379,113 @@ def signatures_for_context(source: str) -> dict[str, str]:
         if rendered is not None:
             out[name] = rendered
     return out
+
+
+# --- additive is not breaking --------------------------------------------
+#
+# The first version of this check compared the whole member set for equality,
+# which made every addition a break. Story #9 needs `Card.blocked_since` — the
+# aging it reports is measured from it — so the check refused the story it was
+# meant to protect. A model that had listened, kept every property a property
+# and touched nothing else, was told no three times.
+#
+# Growth is how a module serves a new story. What callers cannot survive is a
+# promise being withdrawn or changed: a parameter removed or reordered, a new
+# required argument, a property becoming a method, a field appearing before the
+# ones already being passed positionally.
+
+
+def _params_with_defaults(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[tuple[str, bool]]:
+    """Positional parameters in order, each with whether it has a default."""
+    a = node.args
+    positional = [*a.posonlyargs, *a.args]
+    # defaults align to the tail of the positional list.
+    first_default = len(positional) - len(a.defaults)
+    return [(p.arg, i >= first_default) for i, p in enumerate(positional)]
+
+
+def _fields(node: ast.ClassDef) -> list[tuple[str, bool]]:
+    """Public annotated attributes in declaration order, with whether each has a default.
+
+    Order matters: a dataclass's field order is its positional constructor, so
+    a new field appearing before an existing one silently reassigns arguments
+    at every call site that never changed.
+    """
+    return [
+        (child.target.id, child.value is not None)
+        for child in node.body
+        if isinstance(child, ast.AnnAssign)
+        and isinstance(child.target, ast.Name)
+        and not child.target.id.startswith("_")
+    ]
+
+
+def _methods(node: ast.ClassDef) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+    return {
+        child.name: child
+        for child in node.body
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+        and (not child.name.startswith("_") or child.name == "__init__")
+    }
+
+
+def _function_break(old: ast.stmt, new: ast.stmt) -> str | None:
+    """How `new` breaks `old`'s promise to callers, or None if it only adds."""
+    if not isinstance(old, ast.FunctionDef | ast.AsyncFunctionDef):
+        return None
+    if not isinstance(new, ast.FunctionDef | ast.AsyncFunctionDef):
+        return "is no longer a function"
+
+    old_calling = {n for d in old.decorator_list if (n := _decorator_name(d)) in CALLING_DECORATORS}
+    new_calling = {n for d in new.decorator_list if (n := _decorator_name(d)) in CALLING_DECORATORS}
+    if old_calling != new_calling:
+        was = ", ".join(sorted(old_calling)) or "a plain method"
+        now = ", ".join(sorted(new_calling)) or "a plain method"
+        return f"was {was} and is now {now}, so every caller has to change"
+
+    old_params, new_params = _params_with_defaults(old), _params_with_defaults(new)
+    old_names = [n for n, _ in old_params]
+    new_names = [n for n, _ in new_params]
+    if new_names[: len(old_names)] != old_names:
+        return f"parameters ({', '.join(old_names)}) became ({', '.join(new_names)})"
+    required = [n for n, has_default in new_params[len(old_params) :] if not has_default]
+    if required:
+        return f"adds required parameter(s): {', '.join(required)}"
+    return None
+
+
+def _class_break(old: ast.ClassDef, new: ast.stmt) -> str | None:
+    if not isinstance(new, ast.ClassDef):
+        return "is no longer a class"
+
+    old_fields, new_fields = _fields(old), _fields(new)
+    old_names = [n for n, _ in old_fields]
+    new_names = [n for n, _ in new_fields]
+    if new_names[: len(old_names)] != old_names:
+        return (
+            f"fields ({', '.join(old_names)}) became ({', '.join(new_names)}) — "
+            "existing fields must keep their names and their order"
+        )
+    required = [n for n, has_default in new_fields[len(old_fields) :] if not has_default]
+    if required:
+        return f"adds field(s) with no default: {', '.join(required)}"
+
+    old_methods, new_methods = _methods(old), _methods(new)
+    for name, node in old_methods.items():
+        if name not in new_methods:
+            return f"removes `{name}`"
+        if (broke := _function_break(node, new_methods[name])) is not None:
+            return f"`{name}` {broke}"
+    return None
+
+
+def contract_break(old: ast.stmt, new: ast.stmt) -> str | None:
+    """How a replacement breaks what callers already rely on, or None if it grows.
+
+    Adding is always allowed: a new field with a default, a new method, a new
+    optional parameter. Those are how a module serves a story it did not
+    originally have. Withdrawing or reshaping is not.
+    """
+    if isinstance(old, ast.ClassDef):
+        return _class_break(old, new)
+    return _function_break(old, new)

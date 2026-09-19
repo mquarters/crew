@@ -310,8 +310,9 @@ def test_a_property_becoming_a_method_is_refused(module):
     )
     broken = broken_contracts(module, [edit])
     assert "m.py::Card.cycle_time" in broken
-    was, now = broken["m.py::Card.cycle_time"]
-    assert "property" in was and "property" not in now
+    was, broke = broken["m.py::Card.cycle_time"]
+    assert "property" in was
+    assert "every caller has to change" in broke
 
 
 def test_adding_a_field_to_a_dataclass_is_refused(module):
@@ -328,7 +329,7 @@ def test_adding_a_field_to_a_dataclass_is_refused(module):
 
 def test_deleting_a_public_definition_is_refused(module):
     broken = broken_contracts(module, [Ed("m.py", "delete", "format_performance_table")])
-    assert broken["m.py::format_performance_table"][1] == "removed"
+    assert broken["m.py::format_performance_table"][1] == "removed entirely"
 
 
 def test_adding_a_new_definition_is_not_a_contract_break(module):
@@ -366,7 +367,7 @@ def test_the_message_names_the_definition_and_both_shapes(module):
     message = describe_contracts(broken_contracts(module, [edit]))
     assert "format_performance_table" in message
     assert "cards, wip_limits" in message
-    assert "add a new definition alongside" in message
+    assert "Adding is fine" in message
 
 
 def test_the_context_shows_what_the_check_will_judge(module):
@@ -376,3 +377,94 @@ def test_the_context_shows_what_the_check_will_judge(module):
     assert signatures["format_performance_table"] == "(cards, wip_limits)"
     assert signatures["Card.cycle_time"] == "(self) [property]"
     assert "_mean_days" not in signatures
+
+
+def test_adding_a_field_with_a_default_is_allowed(module):
+    """The case a live run found, after this check refused the story it was
+    written to protect. Story #9 reports aging measured from `blocked_since`,
+    so `Card` cannot not grow that field. The model had listened — every
+    property still a property, nothing else touched — and was told no anyway."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass(frozen=True)\nclass Card:\n    created: date\n"
+        "    started: date | None = None\n    blocked_since: date | None = None\n\n"
+        "    @property\n    def cycle_time(self) -> int:\n        return 0\n",
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_a_new_field_without_a_default_is_refused(module):
+    """Every existing construction call omits it, so every one of them breaks."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass(frozen=True)\nclass Card:\n    created: date\n"
+        "    started: date | None = None\n    title: str\n\n"
+        "    @property\n    def cycle_time(self) -> int:\n        return 0\n",
+    )
+    assert "no default" in broken_contracts(module, [edit])["m.py::Card"][1]
+
+
+def test_reordering_existing_fields_is_refused(module):
+    """A dataclass's field order is its positional constructor: reordering
+    silently reassigns arguments at call sites that never changed."""
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass(frozen=True)\nclass Card:\n    started: date | None = None\n"
+        "    created: date = None\n\n"
+        "    @property\n    def cycle_time(self) -> int:\n        return 0\n",
+    )
+    assert "order" in broken_contracts(module, [edit])["m.py::Card"][1]
+
+
+def test_adding_a_property_to_an_existing_class_is_allowed(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass(frozen=True)\nclass Card:\n    created: date\n"
+        "    started: date | None = None\n\n"
+        "    @property\n    def cycle_time(self) -> int:\n        return 0\n\n"
+        "    @property\n    def blocked_aging(self) -> int:\n        return 0\n",
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_adding_an_optional_parameter_is_allowed(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "format_performance_table",
+        "def format_performance_table(cards, wip_limits=None, today=None) -> str:\n"
+        '    return "table"\n',
+    )
+    assert broken_contracts(module, [edit]) == {}
+
+
+def test_adding_a_required_parameter_is_refused(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "format_performance_table",
+        'def format_performance_table(cards, wip_limits, today) -> str:\n    return "table"\n',
+    )
+    assert (
+        "required parameter"
+        in broken_contracts(module, [edit])["m.py::format_performance_table"][1]
+    )
+
+
+def test_removing_a_method_from_a_class_is_refused(module):
+    edit = Ed(
+        "m.py",
+        "replace",
+        "Card",
+        "@dataclass(frozen=True)\nclass Card:\n    created: date\n"
+        "    started: date | None = None\n",
+    )
+    assert "removes" in broken_contracts(module, [edit])["m.py::Card"][1]
