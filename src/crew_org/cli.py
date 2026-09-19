@@ -488,6 +488,16 @@ def deliver(
             )
     for outcome in result.blocked:
         console.print(f"[red]#{outcome.card}[/] {outcome.blocked_reason}")
+        for suffix, content in (
+            ("rejected.diff", outcome.rejected_diff),
+            ("failure.txt", outcome.failure_detail),
+        ):
+            if not content:
+                continue
+            path = VAR / "diffs" / f"{outcome.card}.{suffix}"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            console.print(f"   [dim]{path}[/]")
     if result.not_ours:
         console.print(
             "[dim]not the crew's to build: "

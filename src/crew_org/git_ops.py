@@ -279,6 +279,20 @@ class Workspace:
         _run(["add", "-A"], cwd=self.path)
         return _run(["diff", "--cached"], cwd=self.path)
 
+    def diff_if_open(self) -> str | None:
+        """The patch, or None when there is no worktree left to read.
+
+        Used to keep the evidence from a card that failed, where the caller
+        cannot know whether a worktree was ever opened — and where raising
+        would replace the failure being recorded with a different one.
+        """
+        if self.path is None:
+            return None
+        try:
+            return self.diff()
+        except GitError:
+            return None
+
     def push(self) -> None:
         if self.path is None or self.branch is None:
             raise GitError("no worktree open")

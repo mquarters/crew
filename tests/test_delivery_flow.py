@@ -97,6 +97,9 @@ class FakeWorkspace:
     def __init__(self, tmp):
         self.tmp, self.committed, self.pushed, self.closed = tmp, [], 0, 0
         self.repos_asked: list[str] = []
+        # Recorded in order so a test can prove the evidence was read BEFORE
+        # the worktree was removed, which is the whole point of keeping it.
+        self.events: list[str] = []
 
     def open(self, branch):
         path = self.tmp / branch.replace("/", "__")
@@ -111,7 +114,15 @@ class FakeWorkspace:
     def push(self):
         self.pushed += 1
 
+    def diff(self):
+        return "diff --git a/mod.py b/mod.py\n+what the model wrote\n"
+
+    def diff_if_open(self):
+        self.events.append("diff")
+        return self.diff()
+
     def close(self, path=None):
+        self.events.append("close")
         self.closed += 1
 
 
@@ -309,6 +320,59 @@ def test_the_worktree_is_always_closed(harness):
     """Even when delivery fails, the worktree must not be left behind."""
     failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
     _, _, _, ws, _, _ = harness(checks=[red(), red(), red(), red()], escalate_result=failed)
+    assert ws.closed == 1
+
+
+# --- keeping the evidence of a failure -----------------------------------
+
+
+def test_a_blocked_card_keeps_the_diff_that_failed(harness):
+    """Nothing is committed or pushed until verification passes, so the worktree
+    is the only copy of what the Developer wrote. Losing it means the card
+    blocks with no record of why."""
+    failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
+    result, _, _, _, _, _ = harness(
+        checks=[red(), red(), red(), red()], escalate_result=failed
+    )
+    assert result.blocked[0].rejected_diff is not None
+    assert "what the model wrote" in result.blocked[0].rejected_diff
+
+
+def test_the_evidence_is_read_before_the_worktree_is_removed(harness):
+    """Ordering is the whole fix: a diff taken after close reads nothing."""
+    failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
+    _, _, _, ws, _, _ = harness(checks=[red(), red(), red(), red()], escalate_result=failed)
+    assert ws.events == ["diff", "close"]
+
+
+def test_a_blocked_card_keeps_the_whole_failure_report_not_an_extract(harness):
+    """A pytest run with thirteen failures does not fit in the 400 characters
+    the event log carries, and the part naming the defect is rarely the front."""
+    long_output = "\n".join(f"FAILED tests/test_m.py::test_{i}" for i in range(80))
+    failed = EscalationResult(outcome=Outcome.FAILED, detail="broken")
+    result, _, _, _, _, _ = harness(
+        checks=[red(long_output)] * 4, escalate_result=failed
+    )
+    detail = result.blocked[0].failure_detail
+    assert detail is not None
+    assert len(detail) > 400
+    assert "test_79" in detail
+
+
+def test_a_card_that_succeeds_keeps_no_rejected_diff(harness):
+    """`rejected_diff` means a failure. Setting it on success would make `ok`
+    and the evidence disagree about what happened."""
+    result, _, _, _, _, _ = harness(checks=[green()])
+    assert result.delivered[0].rejected_diff is None
+
+
+def test_the_worktree_closed_is_the_one_that_was_opened(harness):
+    """`for_repo` returns a new workspace when the repository differs. Closing
+    the parent would leak the worktree and close one that never existed."""
+    card = story()
+    card.repo = "sprint-metrics"
+    _, _, _, ws, _, _ = harness(checks=[green()], cards=[card])
+    assert ws.repos_asked == ["sprint-metrics"]
     assert ws.closed == 1
 
 

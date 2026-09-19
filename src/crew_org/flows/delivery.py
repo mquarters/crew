@@ -61,6 +61,15 @@ class DeliveryOutcome:
     attempts_by_class: dict[str, int] = field(default_factory=dict)
     escalated: bool = False
     diff: str | None = None
+    # What the Developer actually wrote, kept when the card blocks. Deliberately
+    # not `diff`: that field means "verified work a dry run chose not to land",
+    # and `ok` is defined in terms of it. This is the opposite — the artifact of
+    # a failure, which would otherwise be deleted with the worktree.
+    rejected_diff: str | None = None
+    # The whole failure report, not the 400-character extract the event log
+    # carries. A pytest run with thirteen failures does not fit in 400
+    # characters, and the part that identifies the defect is rarely the front.
+    failure_detail: str | None = None
 
     def seen(self, failure_class: str) -> int:
         return self.attempts_by_class.get(failure_class, 0)
@@ -457,9 +466,11 @@ def deliver_story(
                 ledger.resolve(number, sprint, "resolved — lint and tests pass")
                 break
             ledger.resolve(number, sprint, "escalated but still failing")
+            outcome.failure_detail = check.failure_report
             outcome.blocked_reason = f"escalation did not resolve it: {check.failure_report[:200]}"
             return outcome
 
+        outcome.failure_detail = check.failure_report
         outcome.blocked_reason = decision.reason
         return outcome
 
@@ -597,13 +608,18 @@ def deliver(
         # The card names its own repository. Using a global default would
         # implement a card belonging to one repo inside another, silently.
         card_repo = card.repo or repo
+        # Bound, not inlined: for_repo returns a *new* workspace when the
+        # repository differs, so closing `ws` would leak the worktree that was
+        # opened and close one that never was.
+        card_ws = ws.for_repo(card_repo)
+        outcome = None
         try:
             outcome = deliver_story(
                 card,
                 board=board,
                 issues=issues,
                 sink=sink,
-                ws=ws.for_repo(card_repo),
+                ws=card_ws,
                 policy=policy,
                 ledger=ledger,
                 sprint=sprint,
@@ -616,7 +632,13 @@ def deliver(
                 card=card.number or 0, blocked_reason=f"{type(exc).__name__}: {exc}"
             )
         finally:
-            ws.close()
+            # Nothing is committed or pushed until verification passes, so for a
+            # card that failed this worktree is the only copy of what was
+            # written. Read it before removing it, or the card blocks with no
+            # evidence of why and the diagnosis has to be guessed.
+            if outcome is not None and not outcome.ok:
+                outcome.rejected_diff = card_ws.diff_if_open()
+            card_ws.close()
 
         if outcome.ok and dry_run:
             # Put the card back: a dry run must leave the board as it found it.
