@@ -95,6 +95,11 @@ class Card(BaseModel):
     work_type: str | None = None
     priority: str | None = None
     owner_agent: str | None = None
+    # Which agile capability this card advances. Set on the crew's own cards
+    # only — a card in a delivery repository advances the product, not the
+    # crew's ability to run a process, and counting it as the latter makes the
+    # scorecard read healthier than it is.
+    capability: str | None = None
     # The epic this story was split from, read straight off the item query
     # rather than by asking each epic for its children. Sibling order is what
     # decides whether a story may be claimed yet.
@@ -215,6 +220,7 @@ _FIELD_TO_ATTR = {
     "Work Type": "work_type",
     "Priority": "priority",
     "Owner Agent": "owner_agent",
+    "Capability": "capability",
     "Sprint": "sprint",
     "Points": "points",
     "Escalations": "escalations",

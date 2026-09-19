@@ -437,3 +437,48 @@ said which one was the model.
 duplicated as string constants across five flow modules, so renaming two of them
 took a commit touching all five — and left the board's own automations pointing
 at options that no longer existed.
+
+## 18. The pilot, and the ladder each card climbs
+
+**`sprint-metrics` is a pilot, not a product.** The crew needs real work to
+exercise a real loop — a story nobody wants produces a delivery nobody can
+judge. The pilot is that work. It may end up useful in its own right, most
+plausibly as a tool the crew calls to read its own delivery; it is not the
+thing being built, and no decision about the crew should be made to suit it.
+
+**Two ladders, kept apart.** Every card advances one of two different things,
+and counting them together hides the only ratio worth watching:
+
+- A card in the **crew** repository advances a *capability* — the crew's
+  ability to run some part of an agile process. It carries a `Capability`
+  field naming which.
+- A card in a **delivery repository** advances a *product*. It carries no
+  capability, because it advances none.
+
+A card that fixes authentication so merges can happen is `Release`: without it,
+release does not work. The field names the capability a card most advances —
+one, not several, because a scorecard that double-counts sums to nothing.
+
+**Why this is a field and not a habit.** The point is a scorecard the board can
+render, not a tag somebody remembers to set. `crew capability` reads it. If
+that command cannot produce the picture, the field has not earned its place —
+`Owner Agent` and `parent` both sat on this board unused for months, and both
+became useful only when something read them.
+
+**The ratio is the number.** How many points a sprint spent on the pilot versus
+on the crew itself says whether the orchestrator is still being built or has
+quietly become a place to work on something else. That number only exists if
+the ladders stay separate.
+
+| Capability | Means |
+|---|---|
+| Refinement | Goals become epics, epics become stories a test can be written from |
+| Planning | What enters a sprint, and when a sprint ends |
+| Implementation | A story becomes code the crew can defend |
+| Review | The diff is judged |
+| Acceptance | The behaviour is judged against the criteria |
+| Release | Approved work reaches the default branch |
+| Flow metrics | The crew can measure its own delivery |
+| Retrospective | The crew learns from a sprint it has finished |
+| Self-diagnosis | The crew finds its own defects without a person reading the code |
+| Audit trail | What happened, who did it, and why — legible without reading the code |
