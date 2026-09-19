@@ -30,9 +30,11 @@ from crew_org.crews.refinement_crew import (
 from crew_org.design import DesignPolicy, EpicShape
 from crew_org.events import CrewEvent, EventKind, EventSink
 from crew_org.flows.moves import move_card
+from crew_org.git_ops import Workspace
 from crew_org.process import ProcessRules
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
+from crew_org.tools.repo_context import repository_context
 
 # Marks a comment as the crew's, so a repeated tick recognises its own work.
 # Ticks are reconciliation passes and run repeatedly; without this a goal would
@@ -273,6 +275,39 @@ def render_split(
     return "\n".join(lines)
 
 
+class RepoContext:
+    """The repository each card is about, read once per tick and reused.
+
+    Refinement touches several cards across one or two repositories in a pass,
+    and the context is identical for all of them — so reading it once is both
+    cheaper and what keeps the cached prefix intact between calls.
+
+    A repository that cannot be read is not a reason to stop refining. The
+    agent is then working the way it always has, which is worse but not broken,
+    and the miss is reported rather than hidden.
+    """
+
+    def __init__(self, ws: Workspace | None, sink: EventSink) -> None:
+        self._ws = ws
+        self._sink = sink
+        self._cache: dict[str, str] = {}
+
+    def for_repo(self, repo: str) -> str:
+        if self._ws is None:
+            return ""
+        if repo not in self._cache:
+            try:
+                clone = self._ws.for_repo(repo).current()
+                self._cache[repo] = repository_context(clone, editing=False)
+            except Exception as exc:  # noqa: BLE001
+                self._sink.note(
+                    EventKind.NOTE,
+                    f"refining {repo} without its code: {exc}"[:120],
+                )
+                self._cache[repo] = ""
+        return self._cache[repo]
+
+
 def refine_epics(
     board: ProjectClient,
     issues: IssueClient,
@@ -283,6 +318,7 @@ def refine_epics(
     *,
     cards: list[Card],
     default_repo: str,
+    context: RepoContext,
 ) -> None:
     """Split approved epics into stories, and decide whether design is warranted."""
     counts = board.counts(cards)
@@ -309,7 +345,11 @@ def refine_epics(
             # Owner one step earlier was given its goal whole — and the Business
             # Analyst is the role that writes the acceptance criteria, so what it
             # cannot see becomes a criterion nobody can satisfy.
-            proposal = split_epic(epic_card.title, _goal_body(issues, repo, number))
+            proposal = split_epic(
+                epic_card.title,
+                _goal_body(issues, repo, number),
+                repository=context.for_repo(repo),
+            )
         except Exception as exc:  # noqa: BLE001
             result.failed.append((number, f"{type(exc).__name__}: {exc}"))
             sink.emit(
@@ -400,6 +440,7 @@ def tick(
     *,
     default_repo: str,
     org: dict | None = None,
+    ws: Workspace | None = None,
 ) -> TickResult:
     """Run one reconciliation pass, to quiescence.
 
@@ -412,6 +453,7 @@ def tick(
     design = DesignPolicy.from_config(org)
 
     result = TickResult()
+    context = RepoContext(ws, sink)
     sink.note(EventKind.TICK_STARTED, "reading board", tick=1)
 
     cards = board.cards()
@@ -454,7 +496,10 @@ def tick(
             )
         )
         try:
-            proposal = propose_epics(f"{card.title}\n\n{_goal_body(issues, repo, number)}")
+            proposal = propose_epics(
+                f"{card.title}\n\n{_goal_body(issues, repo, number)}",
+                repository=context.for_repo(repo),
+            )
         except Exception as exc:  # noqa: BLE001
             result.failed.append((number, f"{type(exc).__name__}: {exc}"))
             sink.emit(
@@ -494,7 +539,17 @@ def tick(
 
     # Epics approved in an earlier tick are refined now. Epics created moments
     # ago are not: they are sitting at the Sponsor's gate, unapproved.
-    refine_epics(board, issues, sink, rules, design, result, cards=cards, default_repo=default_repo)
+    refine_epics(
+        board,
+        issues,
+        sink,
+        rules,
+        design,
+        result,
+        cards=cards,
+        default_repo=default_repo,
+        context=context,
+    )
 
     sink.note(
         EventKind.TICK_FINISHED,

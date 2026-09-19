@@ -203,6 +203,18 @@ class Workspace:
             ref = _run(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=self.clone)
             return ref.rsplit("/", 1)[-1]
 
+    def current(self) -> Path:
+        """The repository at its default branch, for reading.
+
+        Refinement has no branch of its own — it is deciding what work should
+        exist, not doing it — so it reads the clone directly rather than paying
+        for a worktree it would only throw away.
+        """
+        self._ensure_clone()
+        default = self._default_branch()
+        _run(["checkout", "--force", f"origin/{default}"], cwd=self.clone, token=self.token)
+        return self.clone
+
     def open(self, branch: str) -> Path:
         """Create a clean worktree on a new branch off origin/main."""
         assert_writable(branch)

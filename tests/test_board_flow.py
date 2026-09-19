@@ -141,7 +141,7 @@ class FakeBoard:
         return [m for m in self.moves if m[0] in existing]
 
 
-def run(board, issues, monkeypatch, proposer=lambda goal: PROPOSAL):
+def run(board, issues, monkeypatch, proposer=lambda goal, **kw: PROPOSAL):
     monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", proposer)
     sink = EventSink(None)
     seen = []
@@ -231,7 +231,7 @@ def test_epic_cards_are_not_mistaken_for_goals(monkeypatch):
 
 
 def test_one_failing_goal_does_not_abandon_the_others(monkeypatch):
-    def flaky(goal: str):
+    def flaky(goal: str, **_kw):
         if "Goal 1" in goal:
             raise RuntimeError("model unavailable")
         return PROPOSAL
@@ -332,8 +332,10 @@ def epic_card(number: int, status: str = REFINEMENT) -> Card:
 
 
 def run_split(board, issues, monkeypatch, proposal=SPLIT):
-    monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", lambda g: PROPOSAL)
-    monkeypatch.setattr("crew_org.flows.board_flow.split_epic", lambda title, context="": proposal)
+    monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", lambda g, **kw: PROPOSAL)
+    monkeypatch.setattr(
+        "crew_org.flows.board_flow.split_epic", lambda title, context="", **kw: proposal
+    )
     sink = EventSink(None)
     return tick(board, issues, sink, default_repo="sprint-metrics")
 
@@ -408,3 +410,72 @@ def test_an_approved_epic_stops_asking_for_a_decision(monkeypatch):
     issues = FakeIssues()
     run_split(FakeBoard([epic_card(3)]), issues, monkeypatch)
     assert (3, "needs:human") in issues.removed_labels
+
+
+# --- refinement sees the code --------------------------------------------
+
+
+def test_refinement_is_shown_the_code_it_is_deciding_about(monkeypatch, tmp_path):
+    """crew#6 was split into three stories addressed to "the audit trail entry"
+    with no way to know the board already had an empty Owner Agent field. A
+    Business Analyst that cannot see the product writes criteria against one it
+    is imagining."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/mod.py").write_text("def already_here():\n    SENTINEL = 1\n    return 1\n")
+
+    class FakeWorkspace:
+        def for_repo(self, repo):
+            return self
+
+        def current(self):
+            return tmp_path
+
+    shown = {}
+
+    def spy(title, context="", *, repository=""):
+        shown["repository"] = repository
+        return SPLIT
+
+    monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", lambda g, **kw: PROPOSAL)
+    monkeypatch.setattr("crew_org.flows.board_flow.split_epic", spy)
+    tick(
+        FakeBoard([epic_card(3)]),
+        FakeIssues(),
+        EventSink(None),
+        default_repo="sprint-metrics",
+        ws=FakeWorkspace(),
+    )
+
+    assert "already_here" in shown["repository"], "the signature index"
+    assert "SENTINEL" in shown["repository"], "and the bodies"
+    assert "Target an existing definition" not in shown["repository"], (
+        "refinement is not editing; rules for a job it is not doing are noise"
+    )
+
+
+def test_a_repository_it_cannot_read_does_not_stop_refinement(monkeypatch):
+    """Working blind is worse than seeing the code and better than not refining
+    at all, so the miss is reported rather than fatal."""
+
+    class BrokenWorkspace:
+        def for_repo(self, repo):
+            return self
+
+        def current(self):
+            raise RuntimeError("no such remote")
+
+    monkeypatch.setattr("crew_org.flows.board_flow.propose_epics", lambda g, **kw: PROPOSAL)
+    monkeypatch.setattr("crew_org.flows.board_flow.split_epic", lambda t, c="", **kw: SPLIT)
+    sink = EventSink(None)
+    seen = []
+    sink.subscribe(seen.append)
+    result = tick(
+        FakeBoard([epic_card(3)]),
+        FakeIssues(),
+        sink,
+        default_repo="sprint-metrics",
+        ws=BrokenWorkspace(),
+    )
+
+    assert result.stories_created, "the split still happened"
+    assert any("without its code" in e.summary for e in seen), "and it said so"

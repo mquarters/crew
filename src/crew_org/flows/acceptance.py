@@ -25,6 +25,7 @@ from crew_org.git_ops import Workspace, branch_name
 from crew_org.tools import workspace
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
+from crew_org.tools.repo_context import IGNORED_DIRS
 from crew_org.tools.sandbox import Sandbox
 
 # QA reasons about the test code, so what it is shown decides its verdict. A
@@ -39,7 +40,10 @@ from crew_org.tools.sandbox import Sandbox
 # are false. Asking the model in prose not to read an omission as an absence is
 # worse still: it reads equally well as "assume it is covered", which turns a
 # truncation into an acceptance in the gate that now merges without a person.
-QA_CONTEXT_CHAR_CEILING = 200_000
+# 600,000 characters is roughly 150,000 tokens. The crew's own suite is already
+# 189,997 and growing, so 200,000 was weeks from refusing every verdict — a
+# guard that fires in ordinary work is a budget, and this one refuses outright.
+QA_CONTEXT_CHAR_CEILING = 600_000
 # The end of a test run is where the summary and the failures are. Keeping the
 # front of it is the same mistake delivery already learned not to make.
 QA_OUTPUT_CHAR_CEILING = 40_000
@@ -109,7 +113,10 @@ def collect_tests(worktree: Path) -> str:
     parts: list[str] = []
     total = 0
     for path in sorted(worktree.rglob("test_*.py")):
-        if ".venv" in path.parts:
+        # The same exclusions the Developer's context uses. A worktree has no
+        # `var/`, but nothing should depend on that to avoid collecting the
+        # tests of a repository that happens to be checked out inside this one.
+        if IGNORED_DIRS & set(path.parts):
             continue
         rel = path.relative_to(worktree)
         body = path.read_text(encoding="utf-8", errors="ignore")

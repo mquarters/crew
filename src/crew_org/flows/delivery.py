@@ -13,7 +13,6 @@ SCOPE failure means the story was not ready and goes back to refinement.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from crew_org.crews.delivery_crew import Implementation, implement_story
 from crew_org.escalation import (
@@ -33,29 +32,13 @@ from crew_org.process import ProcessRules
 from crew_org.tools import claude_code, regression, workspace
 from crew_org.tools.github_issues import IssueClient
 from crew_org.tools.github_project import Card, ProjectClient
+from crew_org.tools.repo_context import repository_context
 
 SPRINT_BACKLOG = "Sprint Backlog"
 IN_PROGRESS = "In Progress"
 AWAITING_QA = "Awaiting QA"
 BLOCKED = "Blocked"
 STORY_TYPE = "Story"
-
-# Files worth showing the Developer so it writes code that fits in.
-CONTEXT_FILES = ("pyproject.toml", "README.md")
-# The whole repository, on every attempt. The window is 262,144 tokens and the
-# pilot repo is 17,195 characters — under 2% of it. Showing a developer the
-# names of three functions and asking it to honour behaviour it has never read
-# is not a context budget, it is a blindfold, and every rule since #8 has been
-# an attempt to describe in prose what one `cat` would have shown.
-#
-# The ceiling is a guard against a tree that genuinely does not fit, not a
-# budget. It drops whole files and names them: a file cut mid-function is worse
-# than a file left out, because nothing in it marks where it stopped.
-CONTEXT_CHAR_CEILING = 200_000
-# Tool droppings. They tell the Developer nothing and they are not free: the
-# file listing is capped, so eleven cache entries are eleven real files the
-# model never gets shown.
-IGNORED_DIRS = frozenset({".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"})
 
 
 @dataclass
@@ -204,93 +187,6 @@ def not_ours(cards: list[Card], sprint: str, repos: set[str]) -> list[Card]:
         and (c.sprint == sprint or sprint is None)
         and c.repo not in repos
     ]
-
-
-def repository_context(worktree: Path) -> str:
-    """What the repository looks like, and what each file defines.
-
-    Editing works by name, so the names are the context that matters. Listing
-    them is a few hundred tokens that stay identical between attempts, where
-    dumping file bodies was thousands that changed every time — which both
-    poisoned the prefix cache and left the model guessing at targets it had
-    never been shown. Both EDIT failures on story #8 were invented names.
-
-    The names carry their signatures, because a name alone does not say that
-    `is_completed` is a property or that `format_performance_table` takes
-    `(cards, wip_limits)`. Story #9 changed both and broke thirteen tests, and
-    it had never been shown either contract — it was refused for violating a
-    rule nobody had told it. Signatures cost a few tokens more and are just as
-    stable between attempts, so the cacheable prefix is unaffected.
-
-    The bodies follow, in full, on every attempt. They used to appear only on a
-    repair, on a prefix-cache argument: bodies churn between attempts where
-    names do not. That optimised the wrong thing. Story #11 rewrote `main` —
-    dropped its return type, its docstring and its stdin default — and was
-    refused for breaking a contract that lives in a body it had never been
-    shown. The signature line it did get, `main(argv: Sequence[str] | None =
-    None) -> int`, carries none of that. Cache hits are cheaper than a story
-    that never lands.
-    """
-    from crew_org.tools.regression import signatures_for_context  # noqa: PLC0415
-
-    paths = sorted(
-        p for p in worktree.rglob("*") if p.is_file() and not (IGNORED_DIRS & set(p.parts))
-    )
-
-    lines = ["### Files and what they define", ""]
-    for path in paths:
-        rel = path.relative_to(worktree)
-        if path.suffix == ".py":
-            signatures = signatures_for_context(path.read_text(encoding="utf-8", errors="ignore"))
-            defined = (
-                ", ".join(f"{name}{sig}" for name, sig in sorted(signatures.items()))
-                if signatures
-                else "nothing at top level"
-            )
-            lines.append(f"- `{rel}` — {defined}")
-        else:
-            lines.append(f"- `{rel}`")
-
-    lines += [
-        "",
-        "Target an existing definition by the names above. `Class.method` for a "
-        "method. A file is not a definition: to change what a package exports, "
-        "edit `__all__`, not `__init__`.",
-        "",
-        "The signatures above are what merged code already calls. Changing a "
-        "public one is refused — not as a matter of taste, but because callers "
-        "you are not editing would break. Everything else is yours: bodies, "
-        "private helpers, module internals, and new definitions of whatever "
-        "shape the story needs. Design it the way it should be designed.",
-    ]
-
-    for name in CONTEXT_FILES:
-        target = worktree / name
-        if target.exists():
-            lines += ["", f"### {name}", "", "```", target.read_text().strip(), "```"]
-
-    lines += ["", "### Current source", ""]
-    budget = CONTEXT_CHAR_CEILING
-    omitted: list[str] = []
-    for target in sorted(worktree.glob("src/**/*.py")) + sorted(worktree.glob("tests/**/*.py")):
-        if IGNORED_DIRS & set(target.parts):
-            continue
-        rel = target.relative_to(worktree)
-        body = target.read_text(encoding="utf-8", errors="ignore")
-        if len(body) > budget:
-            omitted.append(str(rel))
-            continue
-        budget -= len(body)
-        lines += [f"`{rel}`", "", "```python", body.strip(), "```", ""]
-    if omitted:
-        lines += [
-            "These files exist and are not shown, because the tree did not fit: "
-            + ", ".join(f"`{name}`" for name in omitted)
-            + ". Treat anything they define as code you cannot see.",
-            "",
-        ]
-
-    return "\n".join(lines)
 
 
 def escalation_prompt(story: str, failure: str) -> str:

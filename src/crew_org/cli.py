@@ -54,6 +54,7 @@ def tick(
     from crew_org.auth import resolve_credentials
     from crew_org.config import load_env
     from crew_org.flows.board_flow import tick as run_tick
+    from crew_org.git_ops import Workspace
     from crew_org.llm import health
     from crew_org.tools.github_issues import IssueClient
     from crew_org.tools.github_project import ProjectClient
@@ -73,11 +74,15 @@ def tick(
     console.print(f"[dim]acting as {escape(identity)}[/]")
 
     owner = env["GITHUB_OWNER"]
+    repo = env.get("PILOT_REPO", "crew")
     board = ProjectClient(token, owner, int(env["GITHUB_PROJECT_NUMBER"]))
     issues = IssueClient(token, owner)
+    # Refinement reads the code it is deciding about. A Business Analyst that
+    # cannot see the product writes criteria against one it is imagining.
+    ws = Workspace(owner, repo, token, _bot_identity(token, identity))
 
     with attach(sink, view):
-        result = run_tick(board, issues, sink, default_repo=env.get("PILOT_REPO", "crew"))
+        result = run_tick(board, issues, sink, default_repo=repo, ws=ws)
 
     console.print()
     if result.considered == 0:

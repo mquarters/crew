@@ -540,14 +540,18 @@ def test_a_tree_that_does_not_fit_drops_whole_files_and_names_them(tmp_path):
     """The ceiling is a guard, not a budget. A file cut mid-function is worse
     than a file left out, because nothing in it marks where it stopped — so an
     omitted file is omitted entirely, and the Developer is told it exists."""
-    from crew_org.flows import delivery
+    from crew_org.tools import repo_context
 
+    ceiling = repo_context.CONTEXT_CHAR_CEILING
     (tmp_path / "src").mkdir()
+    # Sized off the ceiling rather than a fixed number, so raising the guard
+    # does not quietly stop this from testing the guard.
+    filler = "x = 1\n" * (ceiling // 60)
     for i in range(40):
-        (tmp_path / f"src/mod{i}.py").write_text(f"MARKER_{i} = 1\n" + "x = 1\n" * 2000)
-    context = delivery.repository_context(tmp_path)
+        (tmp_path / f"src/mod{i}.py").write_text(f"MARKER_{i} = 1\n" + filler)
+    context = repo_context.repository_context(tmp_path)
 
-    assert len(context) < delivery.CONTEXT_CHAR_CEILING * 2
+    assert len(context) < ceiling * 2
     shown = [i for i in range(40) if f"MARKER_{i} = 1" in context]
     assert shown, "nothing was shown at all"
     for i in range(40):

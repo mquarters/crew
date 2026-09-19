@@ -92,10 +92,13 @@ def test_evidence_that_does_not_fit_refuses_a_verdict(tmp_path):
 
     from crew_org.flows import acceptance
 
+    # Sized off the ceiling, so raising the guard does not quietly stop this
+    # from testing the guard. Two files, each just over half of it.
+    filler_lines = acceptance.QA_CONTEXT_CHAR_CEILING // 8
     (tmp_path / "tests").mkdir()
     for name in ("a", "b"):
         (tmp_path / f"tests/test_{name}.py").write_text(
-            f"MARKER_{name} = 1\n" + f"# {name}\n" * 40_000
+            f"MARKER_{name} = 1\n" + f"# {name}\n" * filler_lines
         )
 
     with _pytest.raises(acceptance.EvidenceTooLarge, match="tests/test_b.py"):
