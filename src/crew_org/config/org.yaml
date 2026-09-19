@@ -28,13 +28,29 @@ wip_limits:
   Awaiting Approval: 3
 
 sprint:
-  length_days: 14
+  # One day, matching the board's iteration field — the shortest GitHub allows.
+  # A crew that runs unattended drains a fortnight's scope long before the
+  # fortnight ends, and then the sprint review it was building towards has two
+  # weeks of work in it and is too large to be read. Nothing in the code reads
+  # this; it is here so the number the board runs on is written down somewhere
+  # a person looks.
+  length_days: 1
   # Starting capacity in points. The Sponsor approves epics, not sprint
   # contents: scope is filled mechanically from approved epics in priority
   # order until this is reached. Replaced by measured velocity once there is
   # history to measure.
   capacity_points: 20
-  escalation_budget: 3          # cards per sprint permitted to escalate
+  # Cards per sprint permitted to escalate. One a day: at fortnightly sprints
+  # this was 3 per fortnight, and moving the board to daily iterations would
+  # have made the same number roughly fourteen times the spend without anyone
+  # choosing to. There is no whole number that preserves the old rate, so this
+  # is the deliberate one.
+  #
+  # It reads as spend because escalation today means headless Claude Code on a
+  # subscription. That is what escalation currently *is*, not what it must be —
+  # the budget limits how often a card may reach for help, whatever the help
+  # turns out to be.
+  escalation_budget: 1
   blocked_aging_days: 3         # raise to Sponsor at sprint review beyond this
 
 design:
