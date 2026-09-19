@@ -247,6 +247,24 @@ def run(crew: Crew, *, dry_run: bool = True, max_passes: int = MAX_PASSES) -> Lo
         result.passes += 1
         moved_this_pass = False
 
+        # The board as it actually stands, once per pass. The live view seeds
+        # its swimlanes from this; without it the lanes only ever showed the
+        # deltas of whatever moved while someone was watching.
+        # Best effort: a panel that cannot be seeded is worth less than a tick,
+        # and every phase reads the board for itself anyway.
+        try:
+            counts = crew.board.counts(crew.board.cards())
+        except Exception as exc:  # noqa: BLE001
+            counts = {}
+            crew.sink.note(EventKind.NOTE, f"could not read the board: {exc}"[:120])
+        crew.sink.note(
+            EventKind.TICK_STARTED,
+            f"pass {result.passes}",
+            tick=result.passes,
+            sprint=crew.sprint,
+            counts=counts,
+        )
+
         for name, phase in PHASES:
             try:
                 outcome = phase(crew, dry_run=dry_run)

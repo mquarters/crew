@@ -8,11 +8,25 @@ from crew_org.events import EventSink
 from crew_org.flows import loop
 
 
+class FakeBoard:
+    """Only what the loop itself touches: the per-pass board read that seeds
+    the live view's swimlanes."""
+
+    def __init__(self, counts=None):
+        self._counts = counts or {"Ready": 2, "In Progress": 1}
+
+    def cards(self):
+        return []
+
+    def counts(self, cards=None):
+        return dict(self._counts)
+
+
 @pytest.fixture
 def crew():
     """A Crew whose every dependency is unused: the phases are all faked."""
     return loop.Crew(
-        board=None,
+        board=FakeBoard(),
         issues=None,
         sink=EventSink(None),
         ws=None,
@@ -166,3 +180,40 @@ def test_healing_an_interrupted_run_counts_even_on_a_dry_pass(crew, monkeypatch)
     deliver_returning(monkeypatch, recovered=[7])
 
     assert loop._deliver(crew, dry_run=True).moved is True
+
+
+# --- the panel is seeded from the board ----------------------------------
+
+
+def test_each_pass_reports_the_board_as_it_stands(crew, monkeypatch):
+    """The live view seeds its swimlanes from this. Without it the lanes only
+    ever showed the deltas of whatever moved while someone was watching."""
+    seen = []
+    crew.sink.subscribe(seen.append)
+    phases(monkeypatch, ("refine", [True, False]))
+    loop.run(crew)
+
+    seeds = [e for e in seen if e.detail.get("counts")]
+    assert len(seeds) == 2, "once per pass, not once per run"
+    assert seeds[0].detail["counts"] == {"Ready": 2, "In Progress": 1}
+
+
+def test_a_board_that_cannot_be_read_does_not_abort_the_tick(crew, monkeypatch):
+    """A panel that cannot be seeded is worth less than a tick, and every phase
+    reads the board for itself anyway."""
+
+    class BrokenBoard:
+        def cards(self):
+            raise RuntimeError("github is down")
+
+        def counts(self, cards=None):
+            raise RuntimeError("github is down")
+
+    crew.board = BrokenBoard()
+    seen = []
+    crew.sink.subscribe(seen.append)
+    phases(monkeypatch, ("refine", False))
+    result = loop.run(crew)
+
+    assert result.passes == 1, "the pass ran"
+    assert any("could not read the board" in e.summary for e in seen), "and said why not"
